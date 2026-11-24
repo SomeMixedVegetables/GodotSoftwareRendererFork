@@ -48,6 +48,9 @@ public:
 	// points the display at it.
 	DemoStats render(GPU &p_gpu, const FrameLayout &p_layout, int p_buffer, uint32_t p_frame);
 
+	// Rotation speed in 1/256 units: 256 = normal, 64 = quarter speed.
+	uint32_t speed = 256;
+
 	// Texture placement (all inside the 1024 x 512 texture region).
 	static constexpr int32_t TEX4_X = 640, TEX4_Y = 0; // 64x64 texels, 16 halfwords wide
 	static constexpr int32_t TEX8_X = 704, TEX8_Y = 0; // 64x64 texels, 32 halfwords wide

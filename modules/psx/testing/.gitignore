@@ -1,0 +1,2 @@
+# Golden images of third-party test models (ext_* scenes). Never commit.
+golden_external/

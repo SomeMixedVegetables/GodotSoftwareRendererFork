@@ -66,6 +66,11 @@ public:
 	int32_t dqb = 0; // Depth cue intercept
 	int16_t zsf3 = 4096 / 3; // AVSZ3 scale (here: true average)
 	int16_t zsf4 = 4096 / 4;
+	// Lighting: up to three directional lights.
+	Matrix light_dirs; // LLM: one light direction per row (object space), 1.3.12
+	Matrix light_colors; // LCM: one light colour per column, 1.3.12 (4096 = 1.0)
+	LVector ambient; // BK: 1.19.12 (4096 = 1.0)
+	LVector far_color; // FC: 1.27.4 (16 = colour value 1)
 
 	// --- Data registers ---
 	SVector v[3]; // V0, V1, V2
@@ -76,6 +81,11 @@ public:
 	int16_t sy[3] = { 0, 0, 0 };
 	uint16_t otz = 0;
 	uint32_t flag = 0;
+	struct Color {
+		uint8_t r = 0, g = 0, b = 0, code = 0;
+	};
+	Color rgbc; // Input colour for NCCS/NCDS (vertex/material colour)
+	Color rgb[3]; // Colour FIFO RGB0 .. RGB2
 
 	// --- Options (not hardware) ---
 	int scale = 1; // Scaled VRAM factor: widens the SX/SY range.
@@ -90,6 +100,23 @@ public:
 	// Average Z of SZ1-3 (AVSZ3) or SZ0-3 (AVSZ4), scaled by ZSF3/ZSF4, into OTZ.
 	void avsz3();
 	void avsz4();
+	// Normal-colour lighting on normal V0 (or V0-V2 for the T variants), all
+	// pushing results into the colour FIFO (design doc section 6):
+	//   NCS:  ambient + lights, as a colour (1.0 = 255)
+	//   NCCS: ... multiplied by RGBC (the vertex/material colour)
+	//   NCDS: ... then blended toward FC by IR0 (depth cue / fog)
+	// p_lm defaults on: negative light (facing away) clamps to 0.
+	void ncs(bool p_sf = true, bool p_lm = true);
+	void nccs(bool p_sf = true, bool p_lm = true);
+	void ncds(bool p_sf = true, bool p_lm = true);
+	void nct(bool p_sf = true, bool p_lm = true);
+	void ncct(bool p_sf = true, bool p_lm = true);
+	void ncdt(bool p_sf = true, bool p_lm = true);
+	// MVMVA with RT, V[p_vertex] and TR: rotate and translate without the
+	// perspective divide (MAC1-3 / IR1-3). Used for orthographic views.
+	void mvmva_rt(int p_vertex, bool p_sf = true, bool p_lm = false);
+	// Depth cue RGBC toward FC by IR0 (no lighting).
+	void dpcs(bool p_sf = true, bool p_lm = false);
 
 	// Unsigned Newton-Raphson reciprocal: returns H/SZ in 1.16 (0..1FFFFh)
 	// exactly as the hardware does; sets r_overflow when SZ <= H/2.
@@ -104,6 +131,14 @@ private:
 	int32_t _check_mac0(int64_t p_value);
 	int16_t _saturate_ir(int p_index, int64_t p_value, bool p_lm, bool p_set_flag = true);
 	void _rtp(int p_vertex, bool p_sf, bool p_lm, bool p_last);
+	enum NCMode {
+		NC_PLAIN,
+		NC_COLOR,
+		NC_DEPTH,
+	};
+	void _nc(int p_vertex, NCMode p_mode, bool p_sf, bool p_lm);
+	void _color_tail(int64_t p_mac[3], NCMode p_mode, bool p_sf, bool p_lm);
+	void _push_color(const int64_t p_mac[3]);
 };
 
 // --- CPU-side matrix helpers (what libgte did on the CPU, not the GTE) ---

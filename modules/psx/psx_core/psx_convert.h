@@ -1,0 +1,88 @@
+// Mesh conversion: float geometry in, GTE-ready fixed-point geometry out.
+//
+// One converter serves both paths (design doc, section 15): the Godot
+// renderer calls it at runtime for meshes it meets in a scene, and the
+// importer will call it at import time to bake .psxmesh resources. It knows
+// nothing about Godot; callers pass plain arrays.
+//
+// Positions become int16 "GTE units": p * scale, rounded. When a mesh is too
+// large for int16 it is stored shifted right by `shift` bits (0..2), and the
+// caller multiplies the rotation matrix by 2^shift to compensate. Normals
+// become 1.3.12 unit vectors. Colours are baked per vertex as the final
+// display colour (material albedo times vertex colour, sRGB 0..255), which is
+// what NCCS multiplies by light, so 255 at light 1.0 is the albedo itself.
+
+#pragma once
+
+#include "psx_gte.h"
+
+#include <cstdint>
+#include <vector>
+
+namespace psx {
+
+struct MeshInput {
+	const float *positions = nullptr; // xyz, vertex_count entries
+	const float *normals = nullptr; // xyz, optional
+	const float *colors = nullptr; // rgba, optional
+	const float *uvs = nullptr; // uv, optional (kept for the texture milestone)
+	int32_t vertex_count = 0;
+	const int32_t *indices = nullptr; // optional: none means 0, 1, 2, ...
+	int32_t index_count = 0;
+};
+
+struct ConvertOptions {
+	// GTE units per input unit (world scale times the instance's scale).
+	float scale = 512.0f;
+	// Material colour, sRGB 0..1 (Godot's albedo as authored).
+	float albedo[4] = { 1.0f, 1.0f, 1.0f, 1.0f };
+	bool use_vertex_colors = false;
+	// Vertex colours are already sRGB (otherwise they are linear, as glTF stores them).
+	bool vertex_colors_srgb = false;
+	// The material is alpha-blended: classify triangles by their alpha
+	// (albedo alpha times vertex alpha when vertex colours are used).
+	bool use_alpha = false;
+	// Subdivide until no edge is longer than this, in output (GTE) units;
+	// 0 = off. Big polygons sort badly in the ordering table, cross the near
+	// plane whole and warp affine textures: PS1 games split them the same way.
+	float max_edge = 0.0f;
+	// Stop subdividing past this many triangles.
+	uint32_t max_triangles = 1u << 18;
+};
+
+// How a triangle of an alpha-blended mesh is drawn. The PS1 has one alpha
+// level, 50%, so alpha is rounded to opaque, half or nothing.
+enum TriangleAlpha : uint8_t {
+	TRI_OPAQUE = 0, // alpha >= 0.75
+	TRI_HALF = 1, // 0.25 < alpha < 0.75
+	TRI_HIDDEN = 2, // alpha <= 0.25
+};
+
+struct MeshData {
+	std::vector<SVector> positions; // >> shift
+	std::vector<SVector> normals; // 1.3.12, empty if the input had none
+	std::vector<uint8_t> colors; // rgb, one triple per vertex
+	std::vector<uint8_t> uvs; // uv, 0..255 (texture milestone)
+	std::vector<uint32_t> indices; // three per triangle
+	// One TriangleAlpha per triangle when the material blends; empty = all opaque.
+	std::vector<uint8_t> triangle_alpha;
+	int32_t shift = 0;
+	bool clamped = false; // Some positions did not fit even at the largest shift.
+	// Bounding sphere in stored units (before the shift is undone).
+	SVector center;
+	int32_t radius = 0;
+	float alpha = 1.0f; // Material alpha (for choosing a blend mode)
+
+	uint32_t triangle_count() const { return (uint32_t)(indices.size() / 3); }
+};
+
+static constexpr int32_t CONVERT_MAX_SHIFT = 2;
+
+// Fills r_mesh. Returns false (and leaves r_mesh empty) for empty or invalid input.
+bool convert_mesh(const MeshInput &p_input, const ConvertOptions &p_options, MeshData &r_mesh);
+
+// sRGB <-> linear, 0..1.
+float srgb_to_linear(float p_value);
+float linear_to_srgb(float p_value);
+
+} // namespace psx

@@ -25,6 +25,16 @@
 
   Every result line starts with "PSX_" so it is easy to grep.
 
+  Per-scene settings: scenes\<name>.override.cfg, if present, adds lines to
+  the [rendering] section of override.cfg for that scene's runs.
+
+  External models: -ModelsDir copies a fixed selection of .glb files
+  (-ModelsPerCategory from each top-level folder, by sorted name) into
+  project\external_models and re-imports the project. Scenes named ext_*
+  need them and are skipped when the folder is empty. Models, their import
+  files and their golden images (golden_external\) are all git-ignored:
+  third-party models must never be committed.
+
 .EXAMPLE
   .\modules\psx\testing\psx_test.ps1 all
   .\modules\psx\testing\psx_test.ps1 review -Scene basic
@@ -43,22 +53,57 @@ param(
 	[int]$Tolerance = 0,
 	[int]$CompositeTolerance = 2,
 	[switch]$Stats,
-	[switch]$Dev
+	[switch]$Dev,
+	[string]$ModelsDir = '',
+	[int]$ModelsPerCategory = 2
 )
 
 $ErrorActionPreference = 'Stop'
 $Repo = (Resolve-Path (Join-Path $PSScriptRoot '..\..\..')).Path
 $Project = Join-Path $PSScriptRoot 'project'
 $GoldenRoot = Join-Path $PSScriptRoot 'golden'
+$GoldenExternalRoot = Join-Path $PSScriptRoot 'golden_external'
+$ExternalModels = Join-Path $Project 'external_models'
 $OutRoot = Join-Path $Repo 'bin\psx_test_out'
 $ExeName = if ($Dev) { 'godot.windows.editor.dev.x86_64.console.exe' } else { 'godot.windows.editor.x86_64.console.exe' }
 $Exe = Join-Path $Repo "bin\$ExeName"
 
 function Write-Result([string]$Line) { Write-Host $Line }
 
+function Test-ExternalModels {
+	return (Test-Path $ExternalModels) -and @(Get-ChildItem $ExternalModels -Recurse -Filter '*.glb').Count -gt 0
+}
+
 function Get-Scenes {
 	if ($Scene) { return @($Scene) }
-	return @(Get-ChildItem (Join-Path $Project 'scenes') -Filter '*.tscn' | ForEach-Object { $_.BaseName })
+	$all = @(Get-ChildItem (Join-Path $Project 'scenes') -Filter '*.tscn' | ForEach-Object { $_.BaseName })
+	if (Test-ExternalModels) { return $all }
+	$skipped = @($all | Where-Object { $_ -like 'ext_*' })
+	foreach ($s in $skipped) { Write-Result "PSX_SKIP scene=$s reason=no_external_models (use -ModelsDir)" }
+	return @($all | Where-Object { $_ -notlike 'ext_*' })
+}
+
+function Get-GoldenDir([string]$SceneName) {
+	$root = if ($SceneName -like 'ext_*') { $GoldenExternalRoot } else { $GoldenRoot }
+	return Join-Path $root $SceneName
+}
+
+# Copies a deterministic selection of models into the (git-ignored) test project.
+function Copy-ExternalModels {
+	if (-not $ModelsDir) { return $false }
+	if (-not (Test-Path $ModelsDir)) { throw "ModelsDir not found: $ModelsDir" }
+	if (Test-Path $ExternalModels) { Remove-Item -Recurse -Force $ExternalModels }
+	New-Item -ItemType Directory -Force $ExternalModels | Out-Null
+	$count = 0
+	foreach ($cat in @(Get-ChildItem $ModelsDir -Directory | Sort-Object Name)) {
+		$picked = @(Get-ChildItem $cat.FullName -Recurse -Filter '*.glb' | Sort-Object Name | Select-Object -First $ModelsPerCategory)
+		foreach ($f in $picked) {
+			Copy-Item $f.FullName (Join-Path $ExternalModels ($cat.Name + '_' + $f.Name))
+			$count++
+		}
+	}
+	Write-Result "PSX_MODELS copied=$count per_category=$ModelsPerCategory"
+	return $count -gt 0
 }
 
 function Quote([string]$s) { if ($s -match '[\s"]') { '"' + ($s -replace '"', '\"') + '"' } else { $s } }
@@ -123,18 +168,22 @@ function Invoke-Unit {
 	return $ok
 }
 
-function Set-Override([bool]$Enabled, [string]$DumpDir) {
+function Set-Override([bool]$Enabled, [string]$DumpDir, [string]$SceneName = '') {
 	$lines = @('[rendering]', '', "psx/enabled=$($Enabled.ToString().ToLower())")
 	if ($Enabled) {
 		$lines += "psx/debug/dump_dir=`"$($DumpDir -replace '\\', '/')`""
 		$lines += "psx/debug/dump_frames=$Frames"
 		$lines += "psx/debug/print_stats=$($Stats.IsPresent.ToString().ToLower())"
+		$extra = Join-Path $Project "scenes\$SceneName.override.cfg"
+		if ($SceneName -and (Test-Path $extra)) {
+			$lines += @(Get-Content $extra | Where-Object { $_ -match '\S' -and $_ -notmatch '^\s*[;#\[]' })
+		}
 	}
 	[IO.File]::WriteAllText((Join-Path $Project 'override.cfg'), ($lines -join "`n") + "`n")
 }
 
-function Initialize-Project {
-	if (Test-Path (Join-Path $Project '.godot')) { return }
+function Initialize-Project([bool]$Force = $false) {
+	if (-not $Force -and (Test-Path (Join-Path $Project '.godot'))) { return }
 	New-Item -ItemType Directory -Force $OutRoot | Out-Null
 	$r = Invoke-Godot @('--headless', '--path', $Project, '--import') (Join-Path $OutRoot 'import.log') (Join-Path $OutRoot 'import.err')
 	# On 4.8 beta, --import finishes importing and then exits with an access
@@ -153,7 +202,7 @@ function Invoke-Run([string]$SceneName, [string]$RunMode) {
 	$psxDir = Join-Path $out 'psx'
 	New-Item -ItemType Directory -Force $movieDir, $psxDir | Out-Null
 
-	Set-Override ($RunMode -eq 'on') $psxDir
+	Set-Override ($RunMode -eq 'on') $psxDir $SceneName
 	$godotArgs = @('--path', $Project, '--write-movie', (Join-Path $movieDir 'frame.png'),
 		'--fixed-fps', '30', '--quit-after', "$Frames", "res://scenes/$SceneName.tscn")
 	$r = Invoke-Godot $godotArgs (Join-Path $out 'log.txt') (Join-Path $out 'stderr.txt')
@@ -218,7 +267,7 @@ function Get-RunImages($Summary) {
 
 function Invoke-Check([string]$SceneName) {
 	$s = Invoke-Run $SceneName 'on'
-	$golden = Join-Path $GoldenRoot $SceneName
+	$golden = Get-GoldenDir $SceneName
 	$img = Get-RunImages $s
 	$results = @()
 	$pairs = @(
@@ -241,7 +290,7 @@ function Invoke-Bless([string]$SceneName) {
 	$s = Invoke-Run $SceneName 'on'
 	$img = Get-RunImages $s
 	if (-not (Test-Path $img.Raw) -or -not (Test-Path $img.Composite)) { Write-Result "PSX_BLESS scene=$SceneName result=fail reason=no_output"; return $false }
-	$golden = Join-Path $GoldenRoot $SceneName
+	$golden = Get-GoldenDir $SceneName
 	New-Item -ItemType Directory -Force $golden | Out-Null
 	Copy-Item $img.Raw (Join-Path $golden ('psx_{0:D4}.png' -f $GoldenFrame)) -Force
 	Copy-Item $img.Composite (Join-Path $golden 'composite.png') -Force
@@ -264,6 +313,9 @@ function Invoke-Review([string]$SceneName) {
 # --- main ---
 New-Item -ItemType Directory -Force $OutRoot | Out-Null
 $ok = $true
+if ($ModelsDir -and $Command -ne 'build' -and $Command -ne 'unit') {
+	if (Copy-ExternalModels) { Initialize-Project $true }
+}
 switch ($Command) {
 	'build' { $ok = Invoke-Build }
 	'unit' { $ok = Invoke-Unit }

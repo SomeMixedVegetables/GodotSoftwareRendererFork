@@ -8,12 +8,15 @@
 
 #define _CRT_SECURE_NO_WARNINGS // std::fopen in the PNG writer
 
+#include "../../psx_core/psx_convert.h"
 #include "../../psx_core/psx_frame.h"
 #include "../../psx_core/psx_gpu.h"
 #include "../../psx_core/psx_gte.h"
 #include "../../psx_core/psx_ot.h"
+#include "../../psx_core/psx_render.h"
 #include "../../psx_core/psx_trig.h"
 
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -242,6 +245,391 @@ static void test_nclip_avsz() {
 	CHECK_EQ(g.otz, (1365 * 1800) >> 12);
 	g.avsz4();
 	CHECK_EQ(g.otz, 475);
+}
+
+static GTE lit_gte() {
+	GTE g;
+	g.light_dirs.m[0][2] = 4096; // Light 0 shines along +Z (toward normals facing +Z).
+	g.light_colors.m[0][0] = g.light_colors.m[1][0] = g.light_colors.m[2][0] = 4096; // White.
+	return g;
+}
+
+static void test_gte_lighting() {
+	// NCS: full light saturates at 255, half light is 128.
+	GTE g = lit_gte();
+	g.v[0] = { 0, 0, 4096 };
+	g.ncs();
+	CHECK_EQ(g.rgb[2].r, 255);
+	CHECK(g.flag & FLAG_COLOR_R_SAT);
+	CHECK(!(g.flag & FLAG_ERROR)); // Colour saturation is not an error bit.
+	g.v[0] = { 0, 0, 2048 };
+	g.ncs();
+	CHECK_EQ(g.rgb[2].g, 128);
+
+	// Facing away: lm clamps the level to 0, leaving the ambient (BK = 0.25).
+	g.ambient = { 1024, 1024, 1024 };
+	g.v[0] = { 0, 0, -4096 };
+	g.ncs();
+	CHECK_EQ(g.rgb[2].b, 64);
+	CHECK(g.flag & FLAG_IR1_SAT);
+
+	// NCCS: half light times the vertex colour.
+	g = lit_gte();
+	g.rgbc = { 200, 100, 50, 0x30 };
+	g.v[0] = { 0, 0, 2048 };
+	g.nccs();
+	CHECK_EQ(g.rgb[2].r, 100);
+	CHECK_EQ(g.rgb[2].g, 50);
+	CHECK_EQ(g.rgb[2].b, 25);
+	CHECK_EQ(g.rgb[2].code, 0x30);
+
+	// NCDS: IR0 = 0 keeps the lit colour, 1.0 gives FC, 0.5 lands between.
+	g.far_color = { 30 * 16, 60 * 16, 90 * 16 };
+	g.ir[0] = 0;
+	g.ncds();
+	CHECK_EQ(g.rgb[2].r, 100);
+	g.ir[0] = 4096;
+	g.ncds();
+	CHECK_EQ(g.rgb[2].r, 30);
+	CHECK_EQ(g.rgb[2].g, 60);
+	CHECK_EQ(g.rgb[2].b, 90);
+	g.ir[0] = 2048;
+	g.ncds();
+	CHECK_EQ(g.rgb[2].r, 65);
+
+	// NCCT lights three normals into the FIFO in order.
+	g.v[0] = { 0, 0, 4096 };
+	g.v[1] = { 0, 0, 2048 };
+	g.v[2] = { 0, 0, 0 };
+	g.ncct();
+	CHECK_EQ(g.rgb[0].r, 200);
+	CHECK_EQ(g.rgb[1].r, 100);
+	CHECK_EQ(g.rgb[2].r, 0);
+
+	// DPCS with IR0 = 0 passes RGBC through.
+	g.ir[0] = 0;
+	g.dpcs();
+	CHECK_EQ(g.rgb[2].r, 200);
+	CHECK_EQ(g.rgb[2].b, 50);
+}
+
+// --- Mesh conversion and drawing ---
+
+static void test_convert_mesh() {
+	const float pos[] = { -100, -100, 0, 100, -100, 0, -100, 100, 0, 100, 100, 0 };
+	const float nrm[] = { 0, 0, -2, 0, 0, -2, 0, 0, -2, 0, 0, -2 };
+	const float colors[] = { 0.5f, 0.5f, 0.5f, 1, 1, 1, 1, 1, 0, 0, 0, 1, 1, 0, 0, 1 };
+	const int32_t idx[] = { 0, 1, 2, 1, 3, 2, 0, 1, 9 }; // The last triangle is invalid.
+	MeshInput in;
+	in.positions = pos;
+	in.normals = nrm;
+	in.colors = colors;
+	in.vertex_count = 4;
+	in.indices = idx;
+	in.index_count = 9;
+
+	ConvertOptions opt;
+	opt.scale = 512.0f; // 100 * 512 = 51200: needs one bit of shift.
+	opt.albedo[0] = 1.0f;
+	opt.albedo[1] = 0.5f;
+	opt.albedo[2] = 0.0f;
+	MeshData m;
+	CHECK(convert_mesh(in, opt, m));
+	CHECK_EQ(m.triangle_count(), 2);
+	CHECK_EQ(m.shift, 1);
+	CHECK_EQ(m.positions[3].x, 25600);
+	CHECK_EQ(m.positions[0].y, -25600);
+	CHECK(!m.clamped);
+	CHECK_EQ(m.normals[0].z, -4096); // Normalised.
+	CHECK_EQ(m.colors[0], 255); // Albedo only (vertex colours off).
+	CHECK_EQ(m.colors[1], 128);
+	CHECK_EQ(m.colors[2], 0);
+	CHECK(m.radius >= 36203 && m.radius <= 36205); // 25600 * sqrt(2)
+
+	// Linear vertex colour 0.5 times white albedo is sRGB ~188.
+	opt.albedo[1] = opt.albedo[2] = 1.0f;
+	opt.use_vertex_colors = true;
+	CHECK(convert_mesh(in, opt, m));
+	CHECK_EQ(m.colors[0], 188);
+	CHECK_EQ(m.colors[3 * 2 + 2], 0);
+	opt.vertex_colors_srgb = true; // sRGB vertex colour passes straight through.
+	CHECK(convert_mesh(in, opt, m));
+	CHECK_EQ(m.colors[0], 128);
+
+	MeshInput empty;
+	CHECK(!convert_mesh(empty, opt, m));
+}
+
+static void test_draw_mesh() {
+	// A 200-unit square facing the camera (Y down, Z forward), wound clockwise on screen.
+	const float pos[] = { -100, -100, 0, 100, -100, 0, -100, 100, 0, 100, 100, 0 };
+	const float nrm[] = { 0, 0, -1, 0, 0, -1, 0, 0, -1, 0, 0, -1 };
+	const int32_t front[] = { 0, 1, 2, 1, 3, 2 };
+	const int32_t back[] = { 0, 2, 1, 1, 2, 3 };
+	MeshInput in;
+	in.positions = pos;
+	in.normals = nrm;
+	in.vertex_count = 4;
+	in.indices = front;
+	in.index_count = 6;
+	ConvertOptions opt;
+	opt.scale = 1.0f;
+	opt.albedo[0] = 0.0f;
+	opt.albedo[1] = 1.0f;
+	opt.albedo[2] = 0.0f;
+	MeshData m;
+	CHECK(convert_mesh(in, opt, m));
+
+	auto run = [&](const MeshData &p_mesh, int32_t p_z, const DrawParams &p_params, DrawStats &r_stats) {
+		GPU g;
+		GTE gte = basic_gte();
+		gte.translation = { 0, 0, p_z };
+		gte.ambient = { 4096, 4096, 4096 }; // Ambient 1.0: the baked colour.
+		PacketArena arena(1u << 12);
+		PacketBuilder pb(arena, g.get_encoder());
+		OrderingTable ot(arena, 256);
+		ot.clear();
+		ot.add(255, pb.environment(0, 0, 319, 239, 0, 0, GP0Encoder::texpage(0, 0, 0, 0, true)));
+		draw_mesh(gte, pb, ot, p_mesh, p_params, r_stats);
+		ot.draw(g);
+		return g.vram_get(160, 120);
+	};
+
+	DrawParams params;
+	DrawStats st;
+	CHECK_EQ(run(m, 1000, params, st), rgb15(0, 31, 0));
+	CHECK_EQ(st.packets, 2);
+	CHECK_EQ(st.culled_backface, 0);
+
+	// Facing away: culled with CULL_BACK, drawn with CULL_NONE or CULL_FRONT.
+	in.indices = back;
+	MeshData mb;
+	CHECK(convert_mesh(in, opt, mb));
+	DrawStats sb;
+	CHECK_EQ(run(mb, 1000, params, sb), 0);
+	CHECK_EQ(sb.culled_backface, 2);
+	params.cull = CULL_FRONT;
+	DrawStats sf;
+	CHECK_EQ(run(mb, 1000, params, sf), rgb15(0, 31, 0));
+	CHECK_EQ(sf.packets, 2);
+
+	// Too near (SZ < H/2): dropped.
+	params.cull = CULL_BACK;
+	DrawStats sn;
+	run(m, 100, params, sn);
+	CHECK_EQ(sn.culled_near, 2);
+	// Beyond the far plane: dropped.
+	params.far_z = 500;
+	DrawStats sfar;
+	run(m, 1000, params, sfar);
+	CHECK_EQ(sfar.culled_far, 2);
+	params.far_z = 0xFFFF;
+
+	// Lit by one light at half strength: half the colour.
+	DrawStats sl;
+	{
+		GPU g;
+		GTE gte = basic_gte();
+		gte.translation = { 0, 0, 1000 };
+		gte.light_dirs.m[0][2] = -4096; // Toward the camera, along the normals.
+		gte.light_colors.m[0][0] = gte.light_colors.m[1][0] = gte.light_colors.m[2][0] = 2048;
+		PacketArena arena(1u << 12);
+		PacketBuilder pb(arena, g.get_encoder());
+		OrderingTable ot(arena, 256);
+		ot.clear();
+		ot.add(255, pb.environment(0, 0, 319, 239, 0, 0, GP0Encoder::texpage(0, 0, 0, 0, false)));
+		draw_mesh(gte, pb, ot, m, params, sl);
+		ot.draw(g);
+		CHECK_EQ(g.vram_get(160, 120), rgb15(0, 15, 0)); // 255 * 0.5 = 127 -> 15
+	}
+
+	// Semi-transparent additive over a blue background.
+	DrawStats ss;
+	{
+		GPU g;
+		GTE gte = basic_gte();
+		gte.translation = { 0, 0, 1000 };
+		gte.ambient = { 4096, 4096, 4096 };
+		PacketArena arena(1u << 12);
+		PacketBuilder pb(arena, g.get_encoder());
+		OrderingTable ot(arena, 256);
+		ot.clear();
+		ot.add(255, pb.fill(0, 0, 320, 240, 0, 0, 255));
+		ot.add(255, pb.environment(0, 0, 319, 239, 0, 0, GP0Encoder::texpage(0, 0, 0, 0, false)));
+		DrawParams p;
+		p.semi = true;
+		p.blend = 1; // B + F
+		draw_mesh(gte, pb, ot, m, p, ss);
+		ot.draw(g);
+		CHECK_EQ(g.vram_get(160, 120), rgb15(0, 31, 31));
+		CHECK_EQ(ss.packets, 4); // Two triangles, each with its draw mode.
+	}
+}
+
+static void test_draw_mesh_features() {
+	// Two quads' worth of triangles at different alphas: 1.0, 0.5, 0.1.
+	const float pos[] = { -100, -100, 0, 100, -100, 0, -100, 100, 0, 100, 100, 0 };
+	const float nrm[] = { 0, 0, -1, 0, 0, -1, 0, 0, -1, 0, 0, -1 };
+	const float half_alpha[] = { 1, 1, 1, 0.5f, 1, 1, 1, 0.5f, 1, 1, 1, 0.5f, 1, 1, 1, 0.5f };
+	const int32_t idx[] = { 0, 1, 2, 1, 3, 2 };
+	MeshInput in;
+	in.positions = pos;
+	in.normals = nrm;
+	in.colors = half_alpha;
+	in.vertex_count = 4;
+	in.indices = idx;
+	in.index_count = 6;
+	ConvertOptions opt;
+	opt.scale = 1.0f;
+	opt.use_vertex_colors = true;
+	opt.use_alpha = true;
+	MeshData m;
+	CHECK(convert_mesh(in, opt, m));
+	CHECK_EQ(m.triangle_alpha.size(), 2);
+	CHECK_EQ(m.triangle_alpha[0], TRI_HALF);
+	opt.albedo[3] = 0.2f; // 0.2 * 0.5: hidden.
+	MeshData hidden;
+	CHECK(convert_mesh(in, opt, hidden));
+	CHECK_EQ(hidden.triangle_alpha[1], TRI_HIDDEN);
+	opt.albedo[3] = 1.0f;
+	in.colors = nullptr; // Opaque everywhere: no classes kept.
+	opt.use_vertex_colors = false;
+	MeshData opaque;
+	CHECK(convert_mesh(in, opt, opaque));
+	CHECK(opaque.triangle_alpha.empty());
+
+	auto draw = [&](const MeshData &p_mesh, const DrawParams &p_params, GTE &p_gte, DrawStats &r_stats) {
+		GPU g;
+		PacketArena arena(1u << 12);
+		PacketBuilder pb(arena, g.get_encoder());
+		OrderingTable ot(arena, 256);
+		ot.clear();
+		ot.add(255, pb.fill(0, 0, 320, 240, 0, 0, 0));
+		ot.add(255, pb.environment(0, 0, 319, 239, 0, 0, GP0Encoder::texpage(0, 0, 0, 0, false)));
+		draw_mesh(p_gte, pb, ot, p_mesh, p_params, r_stats);
+		ot.draw(g);
+		return g.vram_get(160, 120);
+	};
+	GTE gte = basic_gte();
+	gte.translation = { 0, 0, 1000 };
+	gte.ambient = { 2048, 2048, 2048 }; // Light level 0.5
+
+	// Alpha classes: hidden triangles are dropped, half ones blended.
+	DrawParams p;
+	p.semi = true;
+	DrawStats sh;
+	draw(hidden, p, gte, sh);
+	CHECK_EQ(sh.culled_alpha, 2);
+	DrawStats sm;
+	draw(m, p, gte, sm);
+	CHECK_EQ(sm.packets, 4); // Both triangles 50%, each with a draw mode.
+
+	// PS1 lighting: white (255) * 0.5 = 127 -> 15. Godot match: linear 0.5
+	// is sRGB 188 -> 23.
+	DrawParams lp;
+	DrawStats s1;
+	CHECK_EQ(draw(opaque, lp, gte, s1), rgb15(15, 15, 15));
+	lp.lighting = LIGHTING_LINEAR;
+	DrawStats s2;
+	CHECK_EQ(draw(opaque, lp, gte, s2), rgb15(23, 23, 23));
+
+	// Emission adds after lighting (PS1 mode: 127 + 64 = 191 -> 23).
+	DrawParams ep;
+	ep.emission[0] = ep.emission[1] = ep.emission[2] = 64;
+	DrawStats s3;
+	CHECK_EQ(draw(opaque, ep, gte, s3), rgb15(23, 23, 23));
+
+	// Fog: DQA/DQB giving IR0 = 1.0 everywhere turns everything FC.
+	DrawParams fp;
+	fp.fog = true;
+	gte.far_color = { 200 * 16, 0, 0 };
+	gte.dqa = 0;
+	gte.dqb = 0x1000000; // 1.0 in 1.7.24
+	DrawStats s4;
+	CHECK_EQ(draw(opaque, fp, gte, s4), rgb15(25, 0, 0));
+}
+
+static void test_subdivide_and_point_lights() {
+	const float pos[] = { -100, -100, 0, 100, -100, 0, -100, 100, 0, 100, 100, 0 };
+	const float nrm[] = { 0, 0, -1, 0, 0, -1, 0, 0, -1, 0, 0, -1 };
+	const int32_t idx[] = { 0, 1, 2, 1, 3, 2 };
+	MeshInput in;
+	in.positions = pos;
+	in.normals = nrm;
+	in.vertex_count = 4;
+	in.indices = idx;
+	in.index_count = 6;
+	ConvertOptions opt;
+	opt.scale = 1.0f;
+	opt.max_edge = 60.0f;
+	MeshData m;
+	CHECK(convert_mesh(in, opt, m));
+	CHECK(m.triangle_count() > 8);
+	// Every edge within the limit, every triangle still facing the same way,
+	// and every edge shared by at most two triangles in opposite directions
+	// (no T-junction cracks: a split edge is split for both neighbours).
+	bool short_edges = true, same_winding = true, conforming = true;
+	std::vector<std::pair<uint32_t, uint32_t>> edges;
+	for (uint32_t t = 0; t < m.triangle_count(); t++) {
+		const SVector *v[3] = { &m.positions[m.indices[t * 3]], &m.positions[m.indices[t * 3 + 1]], &m.positions[m.indices[t * 3 + 2]] };
+		for (int e = 0; e < 3; e++) {
+			const SVector &a = *v[e], &b = *v[(e + 1) % 3];
+			const double dx = a.x - b.x, dy = a.y - b.y;
+			short_edges = short_edges && dx * dx + dy * dy <= 60.0 * 60.0 + 1.0;
+			edges.push_back({ m.indices[t * 3 + e], m.indices[t * 3 + (e + 1) % 3] });
+		}
+		const long long cross = (long long)(v[1]->x - v[0]->x) * (v[2]->y - v[0]->y) - (long long)(v[1]->y - v[0]->y) * (v[2]->x - v[0]->x);
+		same_winding = same_winding && cross > 0;
+	}
+	for (const auto &e : edges) {
+		int same = 0;
+		for (const auto &o : edges) {
+			same += (o.first == e.first && o.second == e.second);
+		}
+		conforming = conforming && same == 1;
+	}
+	// Boundary edges appear once; interior ones once each way. A T-junction
+	// would leave a long interior edge unmatched: check total boundary length.
+	double boundary = 0.0;
+	for (const auto &e : edges) {
+		bool twin = false;
+		for (const auto &o : edges) {
+			twin = twin || (o.first == e.second && o.second == e.first);
+		}
+		if (!twin) {
+			const SVector &a = m.positions[e.first], &b = m.positions[e.second];
+			boundary += std::sqrt((double)(a.x - b.x) * (a.x - b.x) + (double)(a.y - b.y) * (a.y - b.y));
+		}
+	}
+	CHECK(short_edges);
+	CHECK(same_winding);
+	CHECK(conforming);
+	CHECK(boundary > 799.0 && boundary < 801.0); // Only the square's outline.
+
+	// Point light 100 units in front of the quad's centre, range 1 m at
+	// 100 units per metre: the centre is lit, a corner far away is not.
+	GPU g;
+	GTE gte = basic_gte();
+	gte.translation = { 0, 0, 1000 };
+	PacketArena arena(1u << 14);
+	PacketBuilder pb(arena, g.get_encoder());
+	OrderingTable ot(arena, 256);
+	ot.clear();
+	ot.add(255, pb.fill(0, 0, 320, 240, 0, 0, 0));
+	ot.add(255, pb.environment(0, 0, 319, 239, 0, 0, GP0Encoder::texpage(0, 0, 0, 0, false)));
+	PointLight pl;
+	pl.position[2] = -50.0f;
+	pl.metres_per_unit = 0.01f;
+	pl.range = 1.0f;
+	pl.decay = 0.0f;
+	DrawParams p;
+	p.point_lights = &pl;
+	p.point_light_count = 1;
+	DrawStats st;
+	draw_mesh(gte, pb, ot, m, p, st);
+	ot.draw(g);
+	CHECK((g.vram_get(160, 120) & 31) >= 20);
+	CHECK((g.vram_get(160 - 24, 120 - 24) & 31) == 0); // Corner: out of range.
 }
 
 // --- GPU: coverage ---
@@ -822,6 +1210,11 @@ int main(int argc, char **argv) {
 		{ "unr_divide", test_unr_divide },
 		{ "rtps_rtpt", test_rtps },
 		{ "nclip_avsz", test_nclip_avsz },
+		{ "gte_lighting", test_gte_lighting },
+		{ "convert_mesh", test_convert_mesh },
+		{ "draw_mesh", test_draw_mesh },
+		{ "draw_mesh_features", test_draw_mesh_features },
+		{ "subdivide_and_point_lights", test_subdivide_and_point_lights },
 		{ "half_open_coverage", test_half_open_coverage },
 		{ "fill_rule_fan", test_fill_rule_fan },
 		{ "size_limits_and_scale", test_size_limits },

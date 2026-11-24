@@ -191,7 +191,8 @@ DemoStats DemoScene::render(GPU &p_gpu, const FrameLayout &p_layout, int p_buffe
 	gte.h = (uint16_t)(w * 4 / 5); // Same field of view at any width: 256 at 320.
 	gte.ofx = (w / 2) * 65536;
 	gte.ofy = (h / 2) * 65536;
-	gte.rotation = rot_matrix((int32_t)(p_frame * 12), (int32_t)(p_frame * 20), (int32_t)(p_frame * 6));
+	const uint64_t t = (uint64_t)p_frame * speed; // Frames in 1/256 units.
+	gte.rotation = rot_matrix((int32_t)((t * 12) >> 8), (int32_t)((t * 20) >> 8), (int32_t)((t * 6) >> 8));
 	gte.translation = { 0, 0, 1100 };
 	constexpr int16_t S = 300;
 

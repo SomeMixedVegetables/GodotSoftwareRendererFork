@@ -20,11 +20,13 @@
 static RendererSceneRenderRD *psx_create_scene_rd(bool p_mobile) {
 	if (p_mobile) {
 #ifdef MOBILE_RD_ENABLED
-		return memnew(PSXSceneRenderRD<RendererSceneRenderImplementation::RenderForwardMobile>());
+		using Mobile = PSXSceneRenderRD<RendererSceneRenderImplementation::RenderForwardMobile, RendererSceneRenderImplementation::SceneShaderForwardMobile::ShaderData>;
+		return memnew(Mobile());
 #endif
 	} else {
 #ifdef FORWARD_RD_ENABLED
-		return memnew(PSXSceneRenderRD<RendererSceneRenderImplementation::RenderForwardClustered>());
+		using Clustered = PSXSceneRenderRD<RendererSceneRenderImplementation::RenderForwardClustered, RendererSceneRenderImplementation::SceneShaderForwardClustered::ShaderData>;
+		return memnew(Clustered());
 #endif
 	}
 	return nullptr;

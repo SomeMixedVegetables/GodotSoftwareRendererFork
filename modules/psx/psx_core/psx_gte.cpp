@@ -221,6 +221,166 @@ void GTE::avsz4() {
 	_end();
 }
 
+void GTE::mvmva_rt(int p_vertex, bool p_sf, bool p_lm) {
+	_begin();
+	const SVector &vv = v[p_vertex];
+	const int shift = p_sf ? 12 : 0;
+	const int64_t tr[3] = { translation.x, translation.y, translation.z };
+	for (int i = 0; i < 3; i++) {
+		const int16_t *row = rotation.m[i];
+		int64_t acc = _check_mac(i + 1, tr[i] * 4096 + (int64_t)row[0] * vv.x);
+		acc = _check_mac(i + 1, acc + (int64_t)row[1] * vv.y);
+		acc = _check_mac(i + 1, acc + (int64_t)row[2] * vv.z);
+		mac[i + 1] = (int32_t)(acc >> shift);
+		ir[i + 1] = _saturate_ir(i + 1, mac[i + 1], p_lm);
+	}
+	_end();
+}
+
+// --- Lighting (psx-spx: NCS/NCCS/NCDS/DPCS) ---
+
+void GTE::_push_color(const int64_t p_mac[3]) {
+	uint8_t out[3];
+	for (int i = 0; i < 3; i++) {
+		int64_t c = p_mac[i] >> 4; // MAC / 16
+		if (c < 0 || c > 0xFF) {
+			flag |= 1u << (21 - i);
+			c = c < 0 ? 0 : 0xFF;
+		}
+		out[i] = (uint8_t)c;
+	}
+	rgb[0] = rgb[1];
+	rgb[1] = rgb[2];
+	rgb[2].r = out[0];
+	rgb[2].g = out[1];
+	rgb[2].b = out[2];
+	rgb[2].code = rgbc.code;
+}
+
+// From the light level in IR1-3: optionally multiply by RGBC, optionally
+// interpolate toward FC by IR0, then push the colour and set MAC/IR.
+// p_mac holds, on entry, the un-shifted products for the colour stages.
+void GTE::_color_tail(int64_t p_mac[3], NCMode p_mode, bool p_sf, bool p_lm) {
+	const int shift = p_sf ? 12 : 0;
+	if (p_mode == NC_DEPTH) {
+		const int64_t fc[3] = { far_color.x, far_color.y, far_color.z };
+		int16_t t[3];
+		for (int i = 0; i < 3; i++) {
+			const int64_t d = _check_mac(i + 1, (fc[i] << 12) - p_mac[i]) >> shift;
+			t[i] = _saturate_ir(i + 1, d, false);
+		}
+		for (int i = 0; i < 3; i++) {
+			p_mac[i] = _check_mac(i + 1, (int64_t)t[i] * ir[0] + p_mac[i]);
+		}
+	}
+	for (int i = 0; i < 3; i++) {
+		p_mac[i] >>= shift;
+		mac[i + 1] = (int32_t)p_mac[i];
+	}
+	_push_color(p_mac);
+	for (int i = 0; i < 3; i++) {
+		ir[i + 1] = _saturate_ir(i + 1, p_mac[i], p_lm);
+	}
+}
+
+void GTE::_nc(int p_vertex, NCMode p_mode, bool p_sf, bool p_lm) {
+	const SVector &n = v[p_vertex];
+	const int shift = p_sf ? 12 : 0;
+
+	// Light level per light: LLM * N.
+	for (int i = 0; i < 3; i++) {
+		const int16_t *row = light_dirs.m[i];
+		int64_t acc = _check_mac(i + 1, (int64_t)row[0] * n.x);
+		acc = _check_mac(i + 1, acc + (int64_t)row[1] * n.y);
+		acc = _check_mac(i + 1, acc + (int64_t)row[2] * n.z);
+		mac[i + 1] = (int32_t)(acc >> shift);
+	}
+	for (int i = 0; i < 3; i++) {
+		ir[i + 1] = _saturate_ir(i + 1, mac[i + 1], p_lm);
+	}
+
+	// Colour per channel: BK + LCM * levels.
+	const int64_t bk[3] = { ambient.x, ambient.y, ambient.z };
+	const int16_t levels[3] = { ir[1], ir[2], ir[3] };
+	for (int i = 0; i < 3; i++) {
+		const int16_t *row = light_colors.m[i];
+		int64_t acc = _check_mac(i + 1, bk[i] * 4096 + (int64_t)row[0] * levels[0]);
+		acc = _check_mac(i + 1, acc + (int64_t)row[1] * levels[1]);
+		acc = _check_mac(i + 1, acc + (int64_t)row[2] * levels[2]);
+		mac[i + 1] = (int32_t)(acc >> shift);
+	}
+	for (int i = 0; i < 3; i++) {
+		ir[i + 1] = _saturate_ir(i + 1, mac[i + 1], p_lm);
+	}
+
+	int64_t m[3];
+	if (p_mode == NC_PLAIN) {
+		// The colour is the light level itself (MAC, already shifted).
+		for (int i = 0; i < 3; i++) {
+			m[i] = mac[i + 1];
+		}
+		_push_color(m);
+		for (int i = 0; i < 3; i++) {
+			ir[i + 1] = _saturate_ir(i + 1, m[i], p_lm);
+		}
+		return;
+	}
+	const int64_t c[3] = { rgbc.r, rgbc.g, rgbc.b };
+	for (int i = 0; i < 3; i++) {
+		m[i] = _check_mac(i + 1, (c[i] * ir[i + 1]) << 4);
+	}
+	_color_tail(m, p_mode, p_sf, p_lm);
+}
+
+void GTE::ncs(bool p_sf, bool p_lm) {
+	_begin();
+	_nc(0, NC_PLAIN, p_sf, p_lm);
+	_end();
+}
+
+void GTE::nccs(bool p_sf, bool p_lm) {
+	_begin();
+	_nc(0, NC_COLOR, p_sf, p_lm);
+	_end();
+}
+
+void GTE::ncds(bool p_sf, bool p_lm) {
+	_begin();
+	_nc(0, NC_DEPTH, p_sf, p_lm);
+	_end();
+}
+
+void GTE::nct(bool p_sf, bool p_lm) {
+	_begin();
+	for (int i = 0; i < 3; i++) {
+		_nc(i, NC_PLAIN, p_sf, p_lm);
+	}
+	_end();
+}
+
+void GTE::ncct(bool p_sf, bool p_lm) {
+	_begin();
+	for (int i = 0; i < 3; i++) {
+		_nc(i, NC_COLOR, p_sf, p_lm);
+	}
+	_end();
+}
+
+void GTE::ncdt(bool p_sf, bool p_lm) {
+	_begin();
+	for (int i = 0; i < 3; i++) {
+		_nc(i, NC_DEPTH, p_sf, p_lm);
+	}
+	_end();
+}
+
+void GTE::dpcs(bool p_sf, bool p_lm) {
+	_begin();
+	int64_t m[3] = { (int64_t)rgbc.r << 16, (int64_t)rgbc.g << 16, (int64_t)rgbc.b << 16 };
+	_color_tail(m, NC_DEPTH, p_sf, p_lm);
+	_end();
+}
+
 // --- CPU-side helpers ---
 
 Matrix mul_matrix(const Matrix &p_a, const Matrix &p_b) {

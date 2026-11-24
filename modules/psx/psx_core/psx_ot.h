@@ -27,7 +27,10 @@ class PacketArena {
 public:
 	explicit PacketArena(uint32_t p_capacity_words = 1u << 18) { words.resize(p_capacity_words); }
 
-	void clear() { used = 0; }
+	void clear() {
+		used = 0;
+		overflowed = false;
+	}
 	uint32_t get_used() const { return used; }
 	uint32_t get_capacity() const { return (uint32_t)words.size(); }
 	bool is_full() const { return overflowed; }

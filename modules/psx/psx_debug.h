@@ -28,6 +28,22 @@ struct PSXDebug {
 		GLOBAL_DEF_RST(PropertyInfo(Variant::INT, "rendering/psx/vram_scale", PROPERTY_HINT_RANGE, "1,4,1"), 1);
 		GLOBAL_DEF_RST(PropertyInfo(Variant::INT, "rendering/psx/resolution_width", PROPERTY_HINT_RANGE, "64,4096,1"), 320);
 		GLOBAL_DEF_RST(PropertyInfo(Variant::INT, "rendering/psx/resolution_height", PROPERTY_HINT_RANGE, "64,2048,1"), 240);
+		// Scene conversion. world_scale: GTE units per metre. 16-bit screen Z
+		// makes the far limit 65535 / world_scale metres, and the near limit
+		// is H / 2 units (about 0.15 m at 512 and 320x240).
+		GLOBAL_DEF_RST(PropertyInfo(Variant::FLOAT, "rendering/psx/world_scale", PROPERTY_HINT_RANGE, "16,4096,1"), 512.0);
+		// Lighting maths. PS1: the GTE's NCCS, display colour times light
+		// (darker midtones, as on the hardware). Godot match: the light level
+		// applied to linear colour, so lit surfaces match Godot's brightness.
+		GLOBAL_DEF_RST(PropertyInfo(Variant::INT, "rendering/psx/lighting_mode", PROPERTY_HINT_ENUM, "PS1,Godot Match"), 0);
+		// Meshes are subdivided until no edge is longer than this (metres; 0 =
+		// off), so big polygons sort, near-clip and light like small ones.
+		GLOBAL_DEF_RST(PropertyInfo(Variant::FLOAT, "rendering/psx/subdivide_size", PROPERTY_HINT_RANGE, "0,16,0.05,or_greater"), 1.0);
+		// Ambient light when the scene has no WorldEnvironment.
+		GLOBAL_DEF_RST("rendering/psx/default_ambient", Color(0.2, 0.2, 0.2));
+		// Draw the built-in test cube instead of the scene.
+		GLOBAL_DEF_RST("rendering/psx/debug/demo_scene", false);
+		GLOBAL_DEF(PropertyInfo(Variant::INT, "rendering/psx/debug/demo_speed_percent", PROPERTY_HINT_RANGE, "0,400,1"), 100);
 		GLOBAL_DEF("rendering/psx/debug/dump_dir", "");
 		GLOBAL_DEF(PropertyInfo(Variant::INT, "rendering/psx/debug/dump_frames", PROPERTY_HINT_RANGE, "0,10000,1"), 0);
 		GLOBAL_DEF("rendering/psx/debug/print_stats", false);
@@ -56,6 +72,13 @@ struct PSXDebug {
 		const Error err = image->save_png(path);
 		if (err != OK) {
 			ERR_PRINT("PSX: could not save debug frame to " + path);
+		}
+	}
+
+	void report_scene(uint64_t p_frame, uint32_t p_instances, uint32_t p_surfaces, uint32_t p_conversions, uint32_t p_triangles, uint32_t p_near, uint32_t p_backface, uint32_t p_offscreen, uint32_t p_far) const {
+		if (print_stats) {
+			print_line(vformat("PSX_SCENE frame=%d instances=%d surfaces=%d conversions=%d tris_in=%d near=%d backface=%d offscreen=%d far=%d",
+					(int64_t)p_frame, p_instances, p_surfaces, p_conversions, p_triangles, p_near, p_backface, p_offscreen, p_far));
 		}
 	}
 

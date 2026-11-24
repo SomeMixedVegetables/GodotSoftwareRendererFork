@@ -6,9 +6,14 @@
 // hand a frame back to it. As a subclass, every call except render_scene()
 // is inherited unchanged, and render_scene() can fall back to Base.
 //
-// Milestone 1: renders the psx_core demo scene (a spinning textured cube built
-// from GPU packets through the GTE and an ordering table) into every 3D
-// viewport. Godot scenes come next.
+// Every 3D viewport is drawn by the PSX core: PSXSceneBridge turns the scene
+// (camera, meshes, materials, lights, environment) into GPU packets in an
+// ordering table, the GPU rasterizes them into VRAM, and the displayed buffer
+// is scanned out and stretched over the render target. With
+// rendering/psx/debug/demo_scene the built-in test cube is drawn instead.
+//
+// ShaderDataT is the base renderer's compiled-shader type, which is where
+// cull mode, blending and shading live.
 
 #pragma once
 
@@ -16,6 +21,8 @@
 
 #include "psx_core/psx_frame.h"
 #include "psx_core/psx_gpu.h"
+#include "psx_core/psx_ot.h"
+#include "psx_scene_bridge.h"
 #include "psx_debug.h"
 
 #include "core/config/project_settings.h"
@@ -26,11 +33,15 @@
 #include "servers/rendering/renderer_rd/storage_rd/texture_storage.h"
 #include "servers/rendering/rendering_device.h"
 
-template <class Base>
+template <class Base, class ShaderDataT>
 class PSXSceneRenderRD : public Base {
 	psx::GPU *gpu = nullptr;
 	psx::FrameLayout layout;
 	psx::DemoScene demo;
+	bool demo_scene = false;
+	PSXSceneBridge<ShaderDataT> bridge;
+	PSXSceneStats scene_stats;
+	psx::PacketArena arena{ 1u << 21 };
 	LocalVector<uint32_t> frame_pixels;
 	RID frame_texture;
 	uint64_t frame_count = 0;
@@ -50,7 +61,14 @@ class PSXSceneRenderRD : public Base {
 		if (layout.overlaps_texture_region) {
 			WARN_PRINT("PSX: the display buffer overlaps the 1024x512 texture region; raise rendering/psx/vram_scale.");
 		}
+		demo_scene = GLOBAL_GET("rendering/psx/debug/demo_scene");
+		bridge.settings.world_scale = MAX(1.0f, (float)GLOBAL_GET("rendering/psx/world_scale"));
+		bridge.settings.default_ambient = GLOBAL_GET("rendering/psx/default_ambient");
+		bridge.settings.subdivide_size = MAX(0.0f, (float)GLOBAL_GET("rendering/psx/subdivide_size"));
+		bridge.settings.lighting = (int)GLOBAL_GET("rendering/psx/lighting_mode") == 1 ? psx::LIGHTING_LINEAR : psx::LIGHTING_PS1;
 		demo.upload_textures(*gpu);
+		const int speed_percent = GLOBAL_GET("rendering/psx/debug/demo_speed_percent");
+		demo.speed = (uint32_t)CLAMP(speed_percent, 0, 400) * 256 / 100;
 		print_line(vformat("PSX: VRAM %dx%d (scale %d), display %dx%d, %d buffer(s).", gpu->get_vram_width(), gpu->get_vram_height(), scale, layout.width, layout.height, layout.buffer_count));
 	}
 
@@ -67,9 +85,39 @@ class PSXSceneRenderRD : public Base {
 		RD::get_singleton()->set_resource_name(frame_texture, "PSX frame");
 	}
 
-	void _render_frame() {
+	void _render_scene(const RendererSceneRender::CameraData &p_camera, const PagedArray<RenderGeometryInstance *> &p_instances, const PagedArray<RID> &p_lights, RID p_environment, const Color &p_clear) {
+		const int buffer = layout.buffer_count > 1 ? (int)(frame_count & 1) : 0;
+		const int32_t bx = layout.buffer_x[buffer], by = layout.buffer_y[buffer];
+		const int32_t w = layout.width, h = layout.height;
+		arena.clear();
+		psx::PacketBuilder pb(arena, gpu->get_encoder());
+		psx::OrderingTable ot(arena, PSXSceneBridge<ShaderDataT>::OT_SIZE);
+		ot.clear();
+		bridge.build(this, p_camera, p_instances, p_lights, p_environment, w, h, gpu->get_scale(), pb, ot, frame_count, scene_stats);
+
+		// Far end: drawing environment, then the clear (the bucket is LIFO,
+		// so the environment, added last, goes first).
+		const Color bg = bridge.background(this, p_environment, p_clear);
+		const uint32_t far_end = PSXSceneBridge<ShaderDataT>::OT_SIZE - 1;
+		ot.add(far_end, pb.fill(bx, by, w, h, (uint8_t)bg.get_r8(), (uint8_t)bg.get_g8(), (uint8_t)bg.get_b8()));
+		ot.add(far_end, pb.environment(bx, by, bx + w - 1, by + h - 1, bx, by, psx::GP0Encoder::texpage(0, 0, psx::TEXTURE_4BIT, psx::BLEND_HALF, true)));
+		ot.draw(*gpu);
+		gpu->display.x = bx;
+		gpu->display.y = by;
+		gpu->display.width = w;
+		gpu->display.height = h;
+		if (arena.is_full()) {
+			WARN_PRINT_ONCE("PSX: the packet arena is full; some triangles were not drawn.");
+		}
+	}
+
+	void _render_frame(const RendererSceneRender::CameraData &p_camera, const PagedArray<RenderGeometryInstance *> &p_instances, const PagedArray<RID> &p_lights, RID p_environment, const Color &p_clear) {
 		gpu->stats.reset();
-		demo.render(*gpu, layout, (int)(frame_count & 1), (uint32_t)frame_count);
+		if (demo_scene) {
+			demo.render(*gpu, layout, (int)(frame_count & 1), (uint32_t)frame_count);
+		} else {
+			_render_scene(p_camera, p_instances, p_lights, p_environment, p_clear);
+		}
 		frame_pixels.resize(layout.width * layout.height);
 		gpu->scanout_rgba8(frame_pixels.ptr());
 	}
@@ -89,8 +137,11 @@ public:
 		ERR_FAIL_COND(!framebuffer.is_valid());
 		const Size2i target_size = texture_storage->render_target_get_size(render_target);
 
+		const Color clear = texture_storage->render_target_is_clear_requested(render_target)
+				? texture_storage->render_target_get_clear_request_color(render_target)
+				: (Color)GLOBAL_GET("rendering/environment/defaults/default_clear_color");
 		const uint64_t raster_begin = OS::get_singleton()->get_ticks_usec();
-		_render_frame();
+		_render_frame(*p_camera_data, p_instances, p_lights, p_environment, clear);
 		const uint64_t raster_usec = OS::get_singleton()->get_ticks_usec() - raster_begin;
 
 		if (debug.wants_dump(frame_count)) {
@@ -106,6 +157,8 @@ public:
 		const uint64_t upload_usec = OS::get_singleton()->get_ticks_usec() - upload_begin;
 
 		debug.report(frame_count, raster_usec, upload_usec, (int)p_instances.size(), (int)gpu->stats.triangles);
+		const psx::DrawStats &ds = scene_stats.draw;
+		debug.report_scene(frame_count, scene_stats.instances, scene_stats.surfaces, scene_stats.conversions, ds.triangles_in, ds.culled_near, ds.culled_backface, ds.culled_offscreen, ds.culled_far);
 		frame_count++;
 
 		// Nearest-filtered upscale of the PSX frame to the whole render target.
