@@ -62,6 +62,37 @@ Variant psx_setting_validate(int p_setting, const Variant &p_value) {
 	}
 }
 
+String psx_setting_format(int p_setting, const Variant &p_value) {
+	const PSXSettingDef &def = psx_setting_def(p_setting);
+	switch (def.type) {
+		case Variant::BOOL:
+			return (bool)p_value ? "On" : "Off";
+		case Variant::COLOR: {
+			const Color c = p_value;
+			return vformat("(%.2f, %.2f, %.2f)", c.r, c.g, c.b);
+		}
+		case Variant::INT: {
+			const int v = p_value;
+			if (def.hint == PROPERTY_HINT_ENUM) {
+				// "Name" or "Name:value" entries; plain entries count from 0.
+				const Vector<String> items = String(def.hint_string).split(",");
+				for (int i = 0; i < items.size(); i++) {
+					const int colon = items[i].find_char(':');
+					const int value = colon >= 0 ? items[i].substr(colon + 1).to_int() : i;
+					if (value == v) {
+						return colon >= 0 ? items[i].substr(0, colon) : items[i];
+					}
+				}
+			}
+			return itos(v);
+		}
+		case Variant::FLOAT:
+			return String::num((double)p_value, 2);
+		default:
+			return String(p_value);
+	}
+}
+
 namespace {
 
 struct SceneEntry {
@@ -132,6 +163,23 @@ void PSXSettingsRegistry::remove_scene(ObjectID p_node) {
 	Registry &r = registry();
 	MutexLock lock(r.mutex);
 	r.scenes.erase(p_node);
+}
+
+bool PSXSettingsRegistry::get_scene(RID p_scenario, ObjectID &r_node, PSXSettingOverrides &r_overrides) {
+	Registry &r = registry();
+	MutexLock lock(r.mutex);
+	const KeyValue<ObjectID, SceneEntry> *best = nullptr;
+	for (const KeyValue<ObjectID, SceneEntry> &kv : r.scenes) {
+		if (kv.value.scenario == p_scenario && (!best || kv.value.order > best->value.order)) {
+			best = &kv;
+		}
+	}
+	if (!best) {
+		return false;
+	}
+	r_node = best->key;
+	r_overrides = best->value.overrides;
+	return true;
 }
 
 void PSXSettingsRegistry::set_runtime(int p_setting, const Variant &p_value) {

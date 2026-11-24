@@ -9,6 +9,7 @@
 #include "core/object/callable_mp.h"
 #include "core/os/os.h"
 #include "editor/editor_node.h"
+#include "editor/editor_data.h"
 #include "editor/inspector/editor_inspector.h"
 #include "editor/inspector/editor_property_name_processor.h"
 #include "editor/themes/editor_scale.h"
@@ -19,6 +20,8 @@
 #include "scene/gui/label.h"
 #include "scene/gui/separator.h"
 #include "scene/main/timer.h"
+#include "scene/main/viewport.h"
+#include "scene/resources/3d/world_3d.h"
 
 // --- Settings proxy ----------------------------------------------------------
 
@@ -175,7 +178,61 @@ void PSXDock::_update_status() {
 	editor_view->set_disabled(!installed);
 }
 
+void PSXDock::_update_overrides() {
+	// The edited scene's world: the one the editor's 3D views draw.
+	RID scenario;
+	Node *scene = EditorNode::get_singleton()->get_edited_scene();
+	if (scene && scene->is_inside_tree() && scene->get_viewport()) {
+		const Ref<World3D> world = scene->get_viewport()->find_world_3d();
+		if (world.is_valid()) {
+			scenario = world->get_scenario();
+		}
+	}
+	ObjectID node;
+	PSXSettingOverrides o;
+	String text;
+	if (scenario.is_valid() && PSXSettingsRegistry::get_scene(scenario, node, o) && o.mask != 0) {
+		const Node *n = ObjectDB::get_instance<Node>(node);
+		text = vformat(TTR("This scene's %s node overrides:"), n ? String(n->get_name()) : String("PSXSettings"));
+		for (int i = 0; i < PSX_SETTING_MAX; i++) {
+			if (o.has(i)) {
+				text += vformat("\n  %s = %s", String(psx_setting_def(i).name).capitalize(), psx_setting_format(i, o.values[i]));
+			}
+		}
+	} else {
+		node = ObjectID();
+	}
+	// Script overrides (PSX.set_setting) in this editor, apart from the
+	// PS1 view switch above.
+	const PSXSettingOverrides rt = PSXSettingsRegistry::get_runtime();
+	String scripts;
+	for (int i = 0; i < PSX_SETTING_MAX; i++) {
+		if (i != PSX_SETTING_ACTIVE && rt.has(i)) {
+			scripts += vformat("\n  %s = %s", String(psx_setting_def(i).name).capitalize(), psx_setting_format(i, rt.values[i]));
+		}
+	}
+	if (!scripts.is_empty()) {
+		text += (text.is_empty() ? String() : String("\n")) + TTR("Overridden by scripts (PSX.set_setting):") + scripts;
+	}
+	overrides_node = node;
+	if (overrides_label->get_text() != text) {
+		overrides_label->set_text(text);
+	}
+	overrides_box->set_visible(!text.is_empty());
+	select_button->set_visible(node.is_valid());
+}
+
+void PSXDock::_select_overrides_node() {
+	Node *n = ObjectDB::get_instance<Node>(overrides_node);
+	if (n) {
+		EditorNode::get_singleton()->get_editor_selection()->clear();
+		EditorNode::get_singleton()->get_editor_selection()->add_node(n);
+		EditorNode::get_singleton()->edit_node(n);
+	}
+}
+
 void PSXDock::_update_stats() {
+	_update_overrides();
 	if (!PSXSettingsRegistry::is_installed()) {
 		stats->set_text(String());
 		return;
@@ -253,6 +310,22 @@ PSXDock::PSXDock() {
 	vb->add_child(editor_view);
 
 	vb->add_child(memnew(HSeparator));
+
+	overrides_box = memnew(VBoxContainer);
+	overrides_label = memnew(Label);
+	overrides_label->set_autowrap_mode(TextServer::AUTOWRAP_WORD_SMART);
+	overrides_label->set_custom_minimum_size(Size2(150, 0) * EDSCALE);
+	overrides_label->set_tooltip_text(TTR("In this scene these values replace the project settings below, in the editor's 3D views and in the game."));
+	overrides_label->set_mouse_filter(MOUSE_FILTER_PASS);
+	overrides_box->add_child(overrides_label);
+	select_button = memnew(Button);
+	select_button->set_text(TTR("Select PSXSettings Node"));
+	select_button->set_h_size_flags(SIZE_SHRINK_BEGIN);
+	select_button->connect(SceneStringName(pressed), callable_mp(this, &PSXDock::_select_overrides_node));
+	overrides_box->add_child(select_button);
+	overrides_box->add_child(memnew(HSeparator));
+	overrides_box->hide();
+	vb->add_child(overrides_box);
 
 	proxy = memnew(PSXProjectSettingsProxy);
 	inspector = memnew(EditorInspector);

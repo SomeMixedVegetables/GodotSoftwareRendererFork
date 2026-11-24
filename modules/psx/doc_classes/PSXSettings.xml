@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<class name="PSXSettings" inherits="Node" api_type="core" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="../../../doc/class.xsd">
+	<brief_description>
+		Overrides the PS1 renderer's project settings for one scene.
+	</brief_description>
+	<description>
+		Add a PSXSettings node to a scene to give it its own PS1 renderer settings: for example, turn dithering off in one level, or switch the PS1 view off in a menu. It applies to the [World3D] the node is in, so every viewport showing that world uses it, including the editor's 3D views and [SubViewport]s that share the world. If several nodes are in one world, the one that entered the tree last wins.
+		Each setting has two properties: [code]override_&lt;name&gt;[/code] turns the override on, and [code]&lt;name&gt;[/code] holds its value. While the override is off, the inspector shows the project setting's value, read-only. The settings are [code]active[/code], [code]dither[/code], [code]lighting_mode[/code], [code]default_ambient[/code], [code]world_scale[/code], [code]subdivide_size[/code], [code]texture_max_size[/code], [code]texture_depth[/code] and [code]texture_max_colors[/code]; see [PSX] for what each costs to change.
+		Overrides set through the [PSX] singleton apply over this node's.
+		[codeblock]
+		# Dithering off in this scene only.
+		$PSXSettings.set_override("dither", false)
+		[/codeblock]
+	</description>
+	<tutorials>
+	</tutorials>
+	<methods>
+		<method name="clear_override">
+			<return type="void" />
+			<param index="0" name="name" type="StringName" />
+			<description>
+				Turns the override of the setting [param name] off, so the project setting applies again in this scene.
+			</description>
+		</method>
+		<method name="get_value" qualifiers="const">
+			<return type="Variant" />
+			<param index="0" name="name" type="StringName" />
+			<description>
+				Returns this node's value for the setting [param name] when it overrides it, and the project setting's value otherwise.
+			</description>
+		</method>
+		<method name="has_override" qualifiers="const">
+			<return type="bool" />
+			<param index="0" name="name" type="StringName" />
+			<description>
+				Returns [code]true[/code] if this node overrides the setting [param name].
+			</description>
+		</method>
+		<method name="set_override">
+			<return type="void" />
+			<param index="0" name="name" type="StringName" />
+			<param index="1" name="value" type="Variant" />
+			<description>
+				Overrides the setting [param name] with [param value] in this scene. The value is converted to the setting's type and clamped to its range. The change applies from the next frame.
+			</description>
+		</method>
+	</methods>
+</class>

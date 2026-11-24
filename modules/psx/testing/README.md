@@ -166,8 +166,11 @@ Resolution, `vram_scale` and texture banks need a restart.
 
 The PSX dock (right, next to the Inspector) shows whether the renderer is in
 use, turns it on (with Restart Editor), switches the editor's views between
-the PS1 picture and Godot's ("PS1 view in the editor", not saved), edits the
-settings above and shows the last frame's statistics.
+the PS1 picture and Godot's ("PS1 view in the editor", not saved), lists what
+the open scene's PSXSettings node overrides (with a button to select it),
+edits the settings above and shows the last frame's statistics. The classes
+have reference pages in `doc_classes/` (and the settings in Project Settings
+tooltips).
 
 Dither is draw-mode state on the PS1 (GP0 E1h; a polygon's texpage does not
 carry it): the frame's drawing environment sets the resolved value, and a

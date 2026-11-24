@@ -8,6 +8,8 @@
 //     in the editor's viewports (not saved, the game is unaffected);
 //   - the project settings, grouped, saved as they change: Look and Geometry
 //     and Textures apply at once; Display needs a restart;
+//   - what the edited scene's PSXSettings node overrides (the project
+//     values below do not apply there), with a button to select it;
 //   - the last frame's statistics.
 
 #pragma once
@@ -23,6 +25,7 @@ class CheckBox;
 class CheckButton;
 class EditorInspector;
 class HBoxContainer;
+class VBoxContainer;
 class Label;
 class Timer;
 
@@ -49,6 +52,10 @@ class PSXDock : public EditorDock {
 	CheckBox *enabled = nullptr;
 	HBoxContainer *restart_box = nullptr;
 	CheckButton *editor_view = nullptr;
+	VBoxContainer *overrides_box = nullptr;
+	Label *overrides_label = nullptr;
+	Button *select_button = nullptr;
+	ObjectID overrides_node;
 	EditorInspector *inspector = nullptr;
 	PSXProjectSettingsProxy *proxy = nullptr;
 	Label *stats = nullptr;
@@ -62,6 +69,8 @@ class PSXDock : public EditorDock {
 	void _settings_changed();
 	void _update_status();
 	void _update_stats();
+	void _update_overrides();
+	void _select_overrides_node();
 
 protected:
 	void _notification(int p_what);

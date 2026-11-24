@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<class name="ResourceImporterPSXTexture" inherits="ResourceImporter" api_type="editor" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="../../../doc/class.xsd">
+	<brief_description>
+		Imports an image as a [PSXTexture], converted for the PS1 renderer.
+	</brief_description>
+	<description>
+		Select an image in the FileSystem dock, then choose [b]PSX Texture[/b] in the Import dock's [b]Import As[/b] menu and click [b]Reimport[/b]. The image is converted to the PS1's texture formats once, at import, instead of the first time the game draws it, and the Import dock's options let each texture have its own size, colour depth and palette size.
+		Images are not imported this way by default: the standard texture importer stays the default for PNG and other image files.
+	</description>
+	<tutorials>
+	</tutorials>
+	<members>
+		<member name="alpha/cut_threshold" type="float" setter="" getter="" default="0.5">
+			The alpha scissor threshold to make the cut-out version for. Match it to the materials that use the texture with alpha scissor; a material with another threshold converts the texture again when drawn.
+		</member>
+		<member name="preview/ps1_look" type="bool" setter="" getter="" default="true">
+			If [code]true[/code], Godot's renderers and the editor show the PS1 result (reduced size and colours) instead of the source image, so the texture looks the same with the PS1 renderer on or off.
+		</member>
+		<member name="psx/depth" type="int" setter="" getter="" default="-1">
+			The colour depth: Auto (4-bit when 16 colours are enough, else 8-bit), 4-bit, 8-bit or 15-bit. Project Setting uses [member ProjectSettings.rendering/psx/textures/depth].
+		</member>
+		<member name="psx/max_colors" type="int" setter="" getter="" default="-1">
+			The most colours the palette may have, for 4-bit and 8-bit textures. 0 means the depth's own limit (16 or 256); -1 uses [member ProjectSettings.rendering/psx/textures/max_colors].
+		</member>
+		<member name="psx/max_size" type="int" setter="" getter="" default="0">
+			The largest side in texels, 8 to 256 (the PS1's texture page limit). Bigger images are scaled down. Project Setting uses [member ProjectSettings.rendering/psx/textures/max_size].
+		</member>
+	</members>
+</class>

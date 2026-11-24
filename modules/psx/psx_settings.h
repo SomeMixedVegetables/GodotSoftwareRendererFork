@@ -55,6 +55,8 @@ const PSXSettingDef &psx_setting_def(int p_setting);
 int psx_setting_find(const StringName &p_name); // -1 when unknown
 // Coerces p_value to the setting's type and range.
 Variant psx_setting_validate(int p_setting, const Variant &p_value);
+// p_value as the inspector would show it: "On", "Godot Match", "256".
+String psx_setting_format(int p_setting, const Variant &p_value);
 
 struct PSXSettingOverrides {
 	Variant values[PSX_SETTING_MAX];
@@ -118,6 +120,9 @@ public:
 	// recently registered node for a scenario wins.
 	static void set_scene(ObjectID p_node, RID p_scenario, const PSXSettingOverrides &p_overrides);
 	static void remove_scene(ObjectID p_node);
+	// The PSXSettings node that wins for p_scenario, and its overrides.
+	// False when the scenario has none.
+	static bool get_scene(RID p_scenario, ObjectID &r_node, PSXSettingOverrides &r_overrides);
 
 	static void set_runtime(int p_setting, const Variant &p_value);
 	static void clear_runtime(int p_setting);

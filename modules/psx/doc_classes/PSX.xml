@@ -1,0 +1,95 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<class name="PSX" inherits="Object" api_type="core" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="../../../doc/class.xsd">
+	<brief_description>
+		Script access to the PS1 renderer: switch it on and off, override its settings while the game runs, and read its statistics.
+	</brief_description>
+	<description>
+		The PS1 renderer is installed by [member ProjectSettings.rendering/psx/enabled] (a restart is needed). Once installed, its live settings are resolved for each viewport every frame, a later source overriding an earlier one:
+		1. The project settings ([code]rendering/psx/*[/code]).
+		2. The [PSXSettings] node in the scene the viewport shows.
+		3. Overrides set through this singleton with [method set_setting].
+		A [PSXMaterial3D] can then turn dithering on or off and subdivision off for its own surfaces.
+		The setting names are [code]"active"[/code], [code]"dither"[/code], [code]"lighting_mode"[/code], [code]"default_ambient"[/code], [code]"world_scale"[/code], [code]"subdivide_size"[/code], [code]"texture_max_size"[/code], [code]"texture_depth"[/code] and [code]"texture_max_colors"[/code] (see [method get_setting_names]). The first four cost nothing to change. Changing the others makes the next frame convert the meshes or textures it draws again, a one-frame hitch. Resolution, VRAM scale and texture banks are not here: they need a restart.
+		[codeblock]
+		# A graphics menu: PS1 look on or off, dithering on or off.
+		func _on_ps1_look_toggled(on):
+		    PSX.set_active(on)
+
+		func _on_dither_toggled(on):
+		    PSX.set_setting("dither", on)
+		[/codeblock]
+		Overrides set here last until they are cleared with [method clear_setting] or [method clear_settings], or the game quits. They are not saved.
+	</description>
+	<tutorials>
+	</tutorials>
+	<methods>
+		<method name="clear_setting">
+			<return type="void" />
+			<param index="0" name="name" type="StringName" />
+			<description>
+				Removes the script override of the setting [param name], so the scene's [PSXSettings] node or the project setting applies again.
+			</description>
+		</method>
+		<method name="clear_settings">
+			<return type="void" />
+			<description>
+				Removes every script override, including the one [method set_active] makes.
+			</description>
+		</method>
+		<method name="get_setting" qualifiers="const">
+			<return type="Variant" />
+			<param index="0" name="name" type="StringName" />
+			<description>
+				Returns the value of the setting [param name] from the project settings and the script overrides. A [PSXSettings] node's overrides apply only to the viewports showing its world, so they are not included; use [method PSXSettings.get_value] for those.
+			</description>
+		</method>
+		<method name="get_setting_names" qualifiers="const">
+			<return type="PackedStringArray" />
+			<description>
+				Returns the names [method set_setting] and [method get_setting] accept.
+			</description>
+		</method>
+		<method name="get_stats" qualifiers="const">
+			<return type="Dictionary" />
+			<description>
+				Returns statistics for the last frame the PS1 renderer handled, from the viewport drawn last:
+				- [code]frame[/code]: the PS1 renderer's frame counter.
+				- [code]active[/code]: [code]false[/code] when the PS1 view was off and Godot's renderer drew the frame (the other entries are then 0).
+				- [code]instances[/code]: objects drawn.
+				- [code]triangles_in[/code] and [code]triangles_drawn[/code]: triangles sent to the GTE, and drawn after culling.
+				- [code]conversions[/code]: meshes and textures converted this frame.
+				- [code]textures_resident[/code], [code]textures_baked[/code]: textures in texture memory, and how many of them came from a [PSXTexture].
+				- [code]texture_fallbacks[/code]: surfaces drawn untextured because texture memory was full.
+				- [code]texture_banks[/code], [code]vram_free_percent[/code]: texture memory in use.
+				- [code]raster_usec[/code]: time spent drawing the frame, in microseconds.
+			</description>
+		</method>
+		<method name="is_active" qualifiers="const">
+			<return type="bool" />
+			<description>
+				Returns [code]true[/code] if the PS1 view is on, from the project setting and the script override. See [method set_active].
+			</description>
+		</method>
+		<method name="is_available" qualifiers="const">
+			<return type="bool" />
+			<description>
+				Returns [code]true[/code] if the PS1 renderer is installed: [member ProjectSettings.rendering/psx/enabled] was on at startup and the rendering method is Forward+ or Mobile.
+			</description>
+		</method>
+		<method name="set_active">
+			<return type="void" />
+			<param index="0" name="active" type="bool" />
+			<description>
+				Switches the PS1 view on or off for every viewport. When off, Godot's own renderer draws the 3D, at the window's resolution. Same as [code]set_setting("active", active)[/code].
+			</description>
+		</method>
+		<method name="set_setting">
+			<return type="void" />
+			<param index="0" name="name" type="StringName" />
+			<param index="1" name="value" type="Variant" />
+			<description>
+				Overrides the setting [param name] for every viewport, over the project settings and [PSXSettings] nodes. [param value] is converted to the setting's type and clamped to its range.
+			</description>
+		</method>
+	</methods>
+</class>

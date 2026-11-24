@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<class name="PSXMaterial3D" inherits="StandardMaterial3D" api_type="core" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="../../../doc/class.xsd">
+	<brief_description>
+		A [StandardMaterial3D] with options for the PS1 renderer.
+	</brief_description>
+	<description>
+		Works like [StandardMaterial3D] and adds a PSX group: dithering on or off for this material whatever the settings say, and subdivision off. To turn an existing material into one, choose [b]Convert to PSXMaterial3D[/b] in its menu in the inspector; its other properties are kept.
+		Godot's own renderers ignore these options. With the PS1 renderer off, the material draws as a [StandardMaterial3D].
+	</description>
+	<tutorials>
+	</tutorials>
+	<members>
+		<member name="psx_dither" type="int" setter="set_psx_dither" getter="get_psx_dither" enum="PSXMaterial3D.Dither" default="0">
+			Whether the GPU's 4×4 ordered dither is used on this material's polygons. [constant DITHER_PROJECT] follows the [code]dither[/code] setting (project setting, [PSXSettings] node or [method PSX.set_setting]).
+			On the PS1, dither is drawing state rather than part of a polygon, so a material that differs from the setting adds a drawing-mode command before and after each of its triangles. That costs little, but it is not free on large meshes.
+		</member>
+		<member name="psx_subdivide" type="int" setter="set_psx_subdivide" getter="get_psx_subdivide" enum="PSXMaterial3D.Subdivide" default="0">
+			[constant SUBDIVIDE_OFF] draws this material's meshes with their own triangles, without the splitting set by [member ProjectSettings.rendering/psx/subdivide_size]. Use it for meshes modelled with small, even triangles, or to keep the stretched textures and lighting of big polygons as a look. Large polygons near the camera may then be culled whole, as on the hardware.
+		</member>
+	</members>
+	<constants>
+		<constant name="DITHER_PROJECT" value="0" enum="Dither">
+			Dither as the [code]dither[/code] setting says.
+		</constant>
+		<constant name="DITHER_ON" value="1" enum="Dither">
+			Always dither this material.
+		</constant>
+		<constant name="DITHER_OFF" value="2" enum="Dither">
+			Never dither this material.
+		</constant>
+		<constant name="SUBDIVIDE_PROJECT" value="0" enum="Subdivide">
+			Subdivide as the [code]subdivide_size[/code] setting says.
+		</constant>
+		<constant name="SUBDIVIDE_OFF" value="1" enum="Subdivide">
+			Never subdivide this material's meshes.
+		</constant>
+	</constants>
+</class>
