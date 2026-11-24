@@ -103,16 +103,21 @@ function Invoke-Unit {
 	$vcvars = Join-Path $vs 'VC\Auxiliary\Build\vcvars64.bat'
 	$out = Join-Path $OutRoot 'unit'
 	New-Item -ItemType Directory -Force $out | Out-Null
-	$src = Join-Path $PSScriptRoot 'unit\test_psx_raster.cpp'
-	$bin = Join-Path $out 'test_psx_raster.exe'
-	$compile = "call `"$vcvars`" >nul 2>nul && cl /nologo /EHsc /std:c++17 /O2 /W4 /WX `"$src`" /Fo`"$out\\`" /Fe`"$bin`""
+	$core = Join-Path $PSScriptRoot '..\psx_core'
+	$sources = @((Join-Path $PSScriptRoot 'unit\test_psx_core.cpp')) + @(Get-ChildItem $core -Filter *.cpp | ForEach-Object FullName)
+	$srcArgs = ($sources | ForEach-Object { "`"$_`"" }) -join ' '
+	$bin = Join-Path $out 'test_psx_core.exe'
+	$compile = "call `"$vcvars`" >nul 2>nul && cl /nologo /EHsc /std:c++17 /O2 /W4 /WX $srcArgs /Fo`"$out\\`" /Fe`"$bin`""
 	$compileOut = cmd /c $compile 2>&1 | Out-String
 	if ($LASTEXITCODE -ne 0) {
 		Write-Host $compileOut
 		Write-Result 'PSX_UNIT result=fail reason=compile'
 		return $false
 	}
-	& $bin | ForEach-Object { Write-Host $_ }
+	# Also saves the core demo frames (no Godot, no window) for review.
+	$demoDir = Join-Path $out 'demo'
+	New-Item -ItemType Directory -Force $demoDir | Out-Null
+	& $bin --dump $demoDir | ForEach-Object { Write-Host $_ }
 	$ok = $LASTEXITCODE -eq 0
 	Write-Result "PSX_UNIT result=$(if ($ok) {'pass'} else {'fail'})"
 	return $ok

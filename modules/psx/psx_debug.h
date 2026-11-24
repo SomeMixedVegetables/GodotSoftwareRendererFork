@@ -23,6 +23,11 @@ struct PSXDebug {
 	bool print_stats = false;
 
 	static void define_settings() {
+		// Display and VRAM (restart needed). With vram_scale N, VRAM is
+		// (1024 N) x (512 N) and coordinate limits grow by N; 1 is the hardware.
+		GLOBAL_DEF_RST(PropertyInfo(Variant::INT, "rendering/psx/vram_scale", PROPERTY_HINT_RANGE, "1,4,1"), 1);
+		GLOBAL_DEF_RST(PropertyInfo(Variant::INT, "rendering/psx/resolution_width", PROPERTY_HINT_RANGE, "64,4096,1"), 320);
+		GLOBAL_DEF_RST(PropertyInfo(Variant::INT, "rendering/psx/resolution_height", PROPERTY_HINT_RANGE, "64,2048,1"), 240);
 		GLOBAL_DEF("rendering/psx/debug/dump_dir", "");
 		GLOBAL_DEF(PropertyInfo(Variant::INT, "rendering/psx/debug/dump_frames", PROPERTY_HINT_RANGE, "0,10000,1"), 0);
 		GLOBAL_DEF("rendering/psx/debug/print_stats", false);

@@ -27,6 +27,16 @@ window frames, `-Stats`, `-Dev`.
 
 Frame N of the raw dumps and frame N of the movie are the same moment.
 
+## Unit tests
+
+`unit` compiles `unit/test_psx_core.cpp` with every `psx_core/*.cpp` (MSVC,
+`/W4 /WX`) and runs it: trig, the UNR divide, RTPS/RTPT/NCLIP/AVSZ and FLAG,
+coverage and fill rule, size limits and scaled VRAM, dither, blend modes,
+modulation, transparency, CLUTs, texture window, mask bit, fills and copies,
+lines, the ordering table, frame layout and the demo. It also saves demo
+frames as PNG to `bin\psx_test_out\unit\demo\`, rendered without Godot or a
+window.
+
 ## Output
 
 Everything goes to `bin\psx_test_out\` (git-ignored), per scene and mode:
@@ -44,6 +54,8 @@ work in any project:
 | Setting | Effect |
 | --- | --- |
 | `rendering/psx/enabled` | Use the PSX renderer (restart needed) |
+| `rendering/psx/vram_scale` | VRAM is (1024 N) x (512 N); 1 is the hardware (restart needed) |
+| `rendering/psx/resolution_width` / `_height` | Display size, default 320 x 240 (restart needed) |
 | `rendering/psx/debug/dump_dir` | Folder to save raw PSX frames to |
 | `rendering/psx/debug/dump_frames` | How many frames to save, from frame 0 |
 | `rendering/psx/debug/print_stats` | One `PSX_STATS` line per frame: raster and upload time, instance count |

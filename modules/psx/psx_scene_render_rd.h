@@ -6,16 +6,20 @@
 // hand a frame back to it. As a subclass, every call except render_scene()
 // is inherited unchanged, and render_scene() can fall back to Base.
 //
-// Spike: draws one CPU-rasterized triangle at 320x240 into every 3D viewport.
+// Milestone 1: renders the psx_core demo scene (a spinning textured cube built
+// from GPU packets through the GTE and an ordering table) into every 3D
+// viewport. Godot scenes come next.
 
 #pragma once
 
 #ifdef RD_ENABLED
 
-#include "psx_core/psx_raster.h"
+#include "psx_core/psx_frame.h"
+#include "psx_core/psx_gpu.h"
 #include "psx_debug.h"
 
-#include "core/math/math_funcs.h"
+#include "core/config/project_settings.h"
+#include "core/os/memory.h"
 #include "core/templates/local_vector.h"
 #include "servers/rendering/renderer_rd/effects/copy_effects.h"
 #include "servers/rendering/renderer_rd/storage_rd/render_scene_buffers_rd.h"
@@ -24,13 +28,31 @@
 
 template <class Base>
 class PSXSceneRenderRD : public Base {
-	static constexpr int32_t FRAME_WIDTH = 320;
-	static constexpr int32_t FRAME_HEIGHT = 240;
-
+	psx::GPU *gpu = nullptr;
+	psx::FrameLayout layout;
+	psx::DemoScene demo;
 	LocalVector<uint32_t> frame_pixels;
 	RID frame_texture;
 	uint64_t frame_count = 0;
 	PSXDebug debug;
+
+	void _setup() {
+		int scale = GLOBAL_GET("rendering/psx/vram_scale");
+		int width = GLOBAL_GET("rendering/psx/resolution_width");
+		int height = GLOBAL_GET("rendering/psx/resolution_height");
+		scale = CLAMP(scale, 1, psx::MAX_VRAM_SCALE);
+		gpu = memnew(psx::GPU(scale));
+		layout = psx::FrameLayout::make(*gpu, width, height);
+		if (layout.buffer_count == 0) {
+			ERR_PRINT(vformat("PSX: a %dx%d display does not fit in %dx%d VRAM (vram_scale %d). Using 320x240.", width, height, gpu->get_vram_width(), gpu->get_vram_height(), scale));
+			layout = psx::FrameLayout::make(*gpu, 320, 240);
+		}
+		if (layout.overlaps_texture_region) {
+			WARN_PRINT("PSX: the display buffer overlaps the 1024x512 texture region; raise rendering/psx/vram_scale.");
+		}
+		demo.upload_textures(*gpu);
+		print_line(vformat("PSX: VRAM %dx%d (scale %d), display %dx%d, %d buffer(s).", gpu->get_vram_width(), gpu->get_vram_height(), scale, layout.width, layout.height, layout.buffer_count));
+	}
 
 	void _ensure_frame_texture() {
 		if (frame_texture.is_valid()) {
@@ -38,41 +60,19 @@ class PSXSceneRenderRD : public Base {
 		}
 		RD::TextureFormat tf;
 		tf.format = RD::DATA_FORMAT_R8G8B8A8_UNORM;
-		tf.width = FRAME_WIDTH;
-		tf.height = FRAME_HEIGHT;
+		tf.width = layout.width;
+		tf.height = layout.height;
 		tf.usage_bits = RD::TEXTURE_USAGE_SAMPLING_BIT | RD::TEXTURE_USAGE_CAN_UPDATE_BIT;
 		frame_texture = RD::get_singleton()->texture_create(tf, RD::TextureView());
 		RD::get_singleton()->set_resource_name(frame_texture, "PSX frame");
 	}
 
-	void _rasterize_test_frame() {
-		frame_pixels.resize(FRAME_WIDTH * FRAME_HEIGHT);
-		psx::Framebuffer fb;
-		fb.width = FRAME_WIDTH;
-		fb.height = FRAME_HEIGHT;
-		fb.pixels = frame_pixels.ptr();
-
-		psx::clear(fb, psx::pack_rgba(16, 16, 48));
-
-		// Vertex setup uses floats only to spin the test triangle; the
-		// rasterizer itself gets integer screen coordinates, as on PS1.
-		const float angle = (float)frame_count * 0.02f;
-		const float cx = FRAME_WIDTH * 0.5f;
-		const float cy = FRAME_HEIGHT * 0.5f;
-		const float radius = 100.0f;
-		psx::Vertex v[3];
-		const uint8_t colors[3][3] = { { 255, 40, 40 }, { 40, 255, 40 }, { 40, 40, 255 } };
-		for (int i = 0; i < 3; i++) {
-			const float a = angle + (float)i * (float)Math::TAU / 3.0f;
-			v[i].x = (int32_t)Math::round(cx + Math::cos(a) * radius);
-			v[i].y = (int32_t)Math::round(cy + Math::sin(a) * radius);
-			v[i].r = colors[i][0];
-			v[i].g = colors[i][1];
-			v[i].b = colors[i][2];
-		}
-		psx::draw_triangle_gouraud(fb, v[0], v[1], v[2]);
+	void _render_frame() {
+		gpu->stats.reset();
+		demo.render(*gpu, layout, (int)(frame_count & 1), (uint32_t)frame_count);
+		frame_pixels.resize(layout.width * layout.height);
+		gpu->scanout_rgba8(frame_pixels.ptr());
 	}
-
 public:
 	virtual void render_scene(const Ref<RenderSceneBuffers> &p_render_buffers, const RendererSceneRender::CameraData *p_camera_data, const RendererSceneRender::CameraData *p_prev_camera_data, const PagedArray<RenderGeometryInstance *> &p_instances, const PagedArray<RID> &p_lights, const PagedArray<RID> &p_reflection_probes, const PagedArray<RID> &p_voxel_gi_instances, const PagedArray<RID> &p_decals, const PagedArray<RID> &p_lightmaps, const PagedArray<RID> &p_fog_volumes, RID p_environment, RID p_camera_attributes, RID p_compositor, RID p_shadow_atlas, RID p_occluder_debug_tex, RID p_reflection_atlas, RID p_reflection_probe, int p_reflection_probe_pass, float p_screen_mesh_lod_threshold, const RendererSceneRender::RenderShadowData *p_render_shadows, int p_render_shadow_count, const RendererSceneRender::RenderSDFGIData *p_render_sdfgi_regions, int p_render_sdfgi_region_count, float p_window_output_max_value, const RendererSceneRender::RenderSDFGIUpdateData *p_sdfgi_update_data = nullptr, RenderingServerTypes::RenderInfo *r_render_info = nullptr) override {
 		Ref<RenderSceneBuffersRD> rb = p_render_buffers;
@@ -90,11 +90,11 @@ public:
 		const Size2i target_size = texture_storage->render_target_get_size(render_target);
 
 		const uint64_t raster_begin = OS::get_singleton()->get_ticks_usec();
-		_rasterize_test_frame();
+		_render_frame();
 		const uint64_t raster_usec = OS::get_singleton()->get_ticks_usec() - raster_begin;
 
 		if (debug.wants_dump(frame_count)) {
-			debug.dump(frame_count, frame_pixels.ptr(), FRAME_WIDTH, FRAME_HEIGHT);
+			debug.dump(frame_count, frame_pixels.ptr(), layout.width, layout.height);
 		}
 
 		const uint64_t upload_begin = OS::get_singleton()->get_ticks_usec();
@@ -105,10 +105,10 @@ public:
 		RD::get_singleton()->texture_update(frame_texture, 0, bytes);
 		const uint64_t upload_usec = OS::get_singleton()->get_ticks_usec() - upload_begin;
 
-		debug.report(frame_count, raster_usec, upload_usec, (int)p_instances.size(), 1);
+		debug.report(frame_count, raster_usec, upload_usec, (int)p_instances.size(), (int)gpu->stats.triangles);
 		frame_count++;
 
-		// Nearest-filtered upscale of the 320x240 frame to the whole render target.
+		// Nearest-filtered upscale of the PSX frame to the whole render target.
 		this->copy_effects->copy_to_fb_rect(frame_texture, framebuffer, Rect2i(Point2i(), target_size),
 				false, false, false, false, RID(), false, false, false, false, Rect2(), 1.0, false);
 
@@ -119,11 +119,15 @@ public:
 
 	PSXSceneRenderRD() {
 		debug.load();
+		_setup();
 	}
 
 	~PSXSceneRenderRD() {
 		if (frame_texture.is_valid()) {
 			RD::get_singleton()->free_rid(frame_texture);
+		}
+		if (gpu) {
+			memdelete(gpu);
 		}
 	}
 };
