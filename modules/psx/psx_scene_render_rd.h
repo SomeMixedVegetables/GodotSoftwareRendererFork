@@ -31,6 +31,7 @@
 #include "psx_core/psx_ot.h"
 #include "psx_scene_bridge.h"
 #include "psx_debug.h"
+#include "psx_settings.h"
 
 #include "core/config/project_settings.h"
 #include "core/os/memory.h"
@@ -40,6 +41,7 @@
 #include "servers/rendering/renderer_rd/storage_rd/render_scene_buffers_rd.h"
 #include "servers/rendering/renderer_rd/storage_rd/texture_storage.h"
 #include "servers/rendering/rendering_device.h"
+#include "servers/rendering/renderer_viewport.h"
 #include "servers/rendering/rendering_server_globals.h"
 
 template <class Base, class ShaderDataT>
@@ -75,13 +77,7 @@ class PSXSceneRenderRD : public Base {
 			WARN_PRINT("PSX: the display buffer overlaps the 1024x512 texture region; raise rendering/psx/vram_scale.");
 		}
 		demo_scene = GLOBAL_GET("rendering/psx/debug/demo_scene");
-		bridge.settings.world_scale = MAX(1.0f, (float)GLOBAL_GET("rendering/psx/world_scale"));
-		bridge.settings.default_ambient = GLOBAL_GET("rendering/psx/default_ambient");
-		bridge.settings.subdivide_size = MAX(0.0f, (float)GLOBAL_GET("rendering/psx/subdivide_size"));
-		bridge.settings.lighting = (int)GLOBAL_GET("rendering/psx/lighting_mode") == 1 ? psx::LIGHTING_LINEAR : psx::LIGHTING_PS1;
-		bridge.settings.texture.max_size = CLAMP((int)GLOBAL_GET("rendering/psx/textures/max_size"), 8, 256);
-		bridge.settings.texture.depth = (uint8_t)CLAMP((int)GLOBAL_GET("rendering/psx/textures/depth"), 0, 3);
-		bridge.settings.texture.max_colors = CLAMP((int)GLOBAL_GET("rendering/psx/textures/max_colors"), 0, 256);
+		// The live settings (psx_settings.h) are resolved per frame in render_scene().
 		bridge.settings.texture_banks = (uint32_t)MAX(0, (int)GLOBAL_GET("rendering/psx/textures/vram_banks"));
 		// Textures share the 1024x512 texture region with the display buffers
 		// (at scale 1) and, when it is drawn, the demo's textures.
@@ -95,6 +91,35 @@ class PSXSceneRenderRD : public Base {
 		const int speed_percent = GLOBAL_GET("rendering/psx/debug/demo_speed_percent");
 		demo.speed = (uint32_t)CLAMP(speed_percent, 0, 400) * 256 / 100;
 		print_line(vformat("PSX: VRAM %dx%d (scale %d), display %dx%d, %d buffer(s).", gpu->get_vram_width(), gpu->get_vram_height(), scale, layout.width, layout.height, layout.buffer_count));
+		PSXSettingsRegistry::set_installed(true, OS::get_singleton()->get_current_rendering_method(), layout.width, layout.height, scale);
+	}
+
+	// The scenario (World3D) the viewport drawing into p_render_target shows:
+	// the key for PSXSettings nodes. Called on the render thread, where the
+	// viewport list is not changing.
+	static RID _scenario_for(RID p_render_target) {
+		RendererViewport *rv = RSG::viewport;
+		if (!rv) {
+			return RID();
+		}
+		for (const RendererViewport::Viewport *vp : rv->active_viewports) {
+			if (vp->render_target == p_render_target) {
+				return vp->scenario;
+			}
+		}
+		return RID();
+	}
+
+	void _apply(const PSXLiveSettings &p_live) {
+		PSXSceneSettings &s = bridge.settings;
+		s.dither = p_live.dither;
+		s.lighting = p_live.lighting;
+		s.default_ambient = p_live.default_ambient;
+		s.world_scale = MAX(1.0f, p_live.world_scale);
+		s.subdivide_size = MAX(0.0f, p_live.subdivide_size);
+		s.texture.max_size = CLAMP(p_live.texture.max_size, 8, 256);
+		s.texture.depth = (uint8_t)CLAMP((int)p_live.texture.depth, 0, 3);
+		s.texture.max_colors = CLAMP(p_live.texture.max_colors, 0, 256);
 	}
 
 	void _ensure_frame_texture() {
@@ -128,7 +153,7 @@ class PSXSceneRenderRD : public Base {
 		const Color bg = bridge.background(this, p_environment, p_clear);
 		const uint32_t far_end = PSXSceneBridge<ShaderDataT>::OT_SIZE - 1;
 		ot.add(far_end, pb.fill(bx, by, w, h, (uint8_t)bg.get_r8(), (uint8_t)bg.get_g8(), (uint8_t)bg.get_b8()));
-		ot.add(far_end, pb.environment(bx, by, bx + w - 1, by + h - 1, bx, by, psx::GP0Encoder::texpage(0, 0, psx::TEXTURE_4BIT, psx::BLEND_HALF, true)));
+		ot.add(far_end, pb.environment(bx, by, bx + w - 1, by + h - 1, bx, by, psx::GP0Encoder::texpage(0, 0, psx::TEXTURE_4BIT, psx::BLEND_HALF, bridge.settings.dither)));
 		ot.draw(*gpu);
 		gpu->display.x = bx;
 		gpu->display.y = by;
@@ -189,6 +214,19 @@ public:
 
 		RendererRD::TextureStorage *texture_storage = RendererRD::TextureStorage::get_singleton();
 		const RID render_target = rb->get_render_target();
+
+		// Project settings, then the scene's PSXSettings node, then scripts.
+		const PSXLiveSettings live = PSXSettingsRegistry::resolve(_scenario_for(render_target));
+		if (!live.active) {
+			// Off (PSX.set_active(false), the dock's PS1 view toggle): Godot's own 3D.
+			Base::render_scene(p_render_buffers, p_camera_data, p_prev_camera_data, p_instances, p_lights, p_reflection_probes, p_voxel_gi_instances, p_decals, p_lightmaps, p_fog_volumes, p_environment, p_camera_attributes, p_compositor, p_shadow_atlas, p_occluder_debug_tex, p_reflection_atlas, p_reflection_probe, p_reflection_probe_pass, p_screen_mesh_lod_threshold, p_render_shadows, p_render_shadow_count, p_render_sdfgi_regions, p_render_sdfgi_region_count, p_window_output_max_value, p_sdfgi_update_data, r_render_info);
+			PSXFrameStats st;
+			st.frame = frame_count;
+			st.active = false;
+			PSXSettingsRegistry::publish_stats(st);
+			return;
+		}
+		_apply(live);
 		const RID framebuffer = texture_storage->render_target_get_rd_framebuffer(render_target);
 		ERR_FAIL_COND(!framebuffer.is_valid());
 		const Size2i target_size = texture_storage->render_target_get_size(render_target);
@@ -216,6 +254,21 @@ public:
 		const psx::DrawStats &ds = scene_stats.draw;
 		debug.report_scene(frame_count, scene_stats.instances, scene_stats.surfaces, scene_stats.conversions, ds.triangles_in, ds.culled_near, ds.culled_backface, ds.culled_offscreen, ds.culled_far);
 		debug.report_textures(frame_count, ds.textured, ds.windowed, scene_stats.textures_resident, scene_stats.textures_baked, scene_stats.texture_uploads, scene_stats.texture_fallbacks, scene_stats.texture_banks, scene_stats.vram_free_percent);
+		{
+			PSXFrameStats st;
+			st.frame = frame_count;
+			st.instances = scene_stats.instances;
+			st.triangles_in = ds.triangles_in;
+			st.triangles_drawn = (uint32_t)gpu->stats.triangles;
+			st.conversions = scene_stats.conversions;
+			st.textures_resident = scene_stats.textures_resident;
+			st.textures_baked = scene_stats.textures_baked;
+			st.texture_fallbacks = scene_stats.texture_fallbacks;
+			st.texture_banks = scene_stats.texture_banks;
+			st.vram_free_percent = scene_stats.vram_free_percent;
+			st.raster_usec = raster_usec;
+			PSXSettingsRegistry::publish_stats(st);
+		}
 		frame_count++;
 
 		// Nearest-filtered upscale of the PSX frame to the whole render target.
@@ -235,6 +288,7 @@ public:
 	}
 
 	~PSXSceneRenderRD() {
+		PSXSettingsRegistry::set_installed(false, String(), 0, 0, 0);
 		helpers.reset();
 		if (overlay_environment.is_valid()) {
 			this->environment_free(overlay_environment);

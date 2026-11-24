@@ -937,7 +937,7 @@ static void test_textured_mesh() {
 	upload_rect(g, clx, cly, 16, 1, tex.clut.data());
 	const DrawTexture dt = make_draw_texture(tex, tx, ty, clx, cly, -1, 0, -1, 0, BLEND_HALF, false);
 
-	auto draw = [&](const MeshData &p_mesh, DrawStats &r_stats, const DrawTexture *p_tex = nullptr, bool p_fog = false) {
+	auto draw = [&](const MeshData &p_mesh, DrawStats &r_stats, const DrawTexture *p_tex = nullptr, bool p_fog = false, bool p_dither = false) {
 		PacketArena arena(1u << 12);
 		PacketBuilder pb(arena, g.get_encoder());
 		OrderingTable ot(arena, 256);
@@ -946,7 +946,8 @@ static void test_textured_mesh() {
 		gte.translation = { 0, 0, 1000 };
 		gte.ambient = { 2048, 2048, 2048 };
 		DrawParams p;
-		p.dither = false;
+		p.dither = p_dither;
+		p.frame_dither = false; // The environment below turns it off
 		p.texture = p_tex ? p_tex : &dt;
 		if (p_fog) {
 			// Full fog everywhere (IR0 = DQB = 1.0), toward (0, 128, 255).
@@ -1004,6 +1005,40 @@ static void test_textured_mesh() {
 	CHECK_EQ(g.vram_get(60, 20), a);
 	CHECK_EQ(g.vram_get(60 + 26, 20), b);
 	CHECK_EQ(g.get_state().texture_bank, 0); // Back to VRAM after each triangle
+
+	// Dither is draw-mode state: a mesh whose dither differs from the
+	// frame's (a PSXMaterial3D override) switches it around each triangle
+	// and restores it. A mid-grey texel at half light (about 64 of 255)
+	// sits on a 5-bit step, so dithered pixels vary over 4 x 4.
+	const std::vector<uint8_t> grey = rgba_image(8, 8, [](int, int) -> uint32_t { return 0xFF808080u; });
+	TextureData gtex;
+	CHECK(convert_texture(grey.data(), 8, 8, topt, gtex));
+	int32_t gx, gy, gcx, gcy;
+	CHECK(alloc.alloc(gtex.hw_width(), gtex.height, gx, gy));
+	CHECK(alloc.alloc_clut(16, gcx, gcy));
+	upload_rect(g, gx, gy, gtex.hw_width(), gtex.height, gtex.texels.data());
+	upload_rect(g, gcx, gcy, 16, 1, gtex.clut.data());
+	const DrawTexture dt_grey = make_draw_texture(gtex, gx, gy, gcx, gcy, -1, 0, -1, 0, BLEND_HALF, false);
+	auto uniform_block = [&]() {
+		const uint16_t first = g.vram_get(60, 20);
+		bool same = true;
+		for (int y = 20; y < 24; y++) {
+			for (int x = 60; x < 64; x++) {
+				same = same && g.vram_get(x, y) == first;
+			}
+		}
+		return same;
+	};
+	DrawStats sd;
+	draw(quad, sd, &dt_grey, false, false);
+	CHECK(uniform_block());
+	draw(quad, sd, &dt_grey, false, true);
+	CHECK(!uniform_block());
+	CHECK(!g.get_state().dither); // The frame's, restored
+	// The texture's own texpage bit does not dither (polygons ignore it).
+	const DrawTexture dt_dither = make_draw_texture(gtex, gx, gy, gcx, gcy, -1, 0, -1, 0, BLEND_HALF, true);
+	draw(quad, sd, &dt_dither, false, false);
+	CHECK(uniform_block());
 
 	// Textured fog: the texel fades to black and the fog colour is added,
 	// so full fog is the fog colour: (0, 128, 255) -> (0, 16, 31).

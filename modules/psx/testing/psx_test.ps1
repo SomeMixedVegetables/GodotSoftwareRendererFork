@@ -96,6 +96,11 @@ $GoldenAliases = @{ 'textured_baked' = 'textured'; 'gltf_baked' = 'gltf_runtime'
 # How many resident textures each scene's last PSX_TEXTURES line must report
 # as baked (its override.cfg turns print_stats on).
 $ExpectBaked = @{ 'textured_baked' = 6; 'gltf_baked' = 2 }
+# A line each scene's run must print (its script checks itself).
+$ExpectLines = @{ 'controls' = 'PSX_CONTROLS result=pass'; 'controls_off' = 'PSX_CONTROLS result=pass' }
+# Scenes that switch the PS1 view off (PSXSettings active = false): Godot's
+# own renderer draws, so there are no PSX frames and no goldens.
+$PsxOffScenes = @('controls_off')
 
 function Get-GoldenDir([string]$SceneName) {
 	if ($GoldenAliases.ContainsKey($SceneName)) { $SceneName = $GoldenAliases[$SceneName] }
@@ -297,10 +302,15 @@ function Invoke-Check([string]$SceneName) {
 	$golden = Get-GoldenDir $SceneName
 	$img = Get-RunImages $s
 	$results = @()
-	$pairs = @(
+	if ($PsxOffScenes -contains $SceneName) {
+		$offOk = ($s.psx_dumps -eq 0) -and ($s.movie_frames -gt 0)
+		Write-Result "PSX_CHECK scene=$SceneName image=psx_off result=$(if ($offOk) {'pass'} else {'fail'}) psx_dumps=$($s.psx_dumps) movie_frames=$($s.movie_frames)"
+		$results += $offOk
+	}
+	$pairs = if ($PsxOffScenes -contains $SceneName) { @() } else { @(
 		@{ Name = 'raw'; Expected = (Join-Path $golden ('psx_{0:D4}.png' -f $GoldenFrame)); Actual = $img.Raw; Tol = $Tolerance },
 		@{ Name = 'composite'; Expected = (Join-Path $golden 'composite.png'); Actual = $img.Composite; Tol = $CompositeTolerance }
-	)
+	) }
 	foreach ($p in $pairs) {
 		if (-not (Test-Path $p.Expected)) { Write-Result "PSX_CHECK scene=$SceneName image=$($p.Name) result=missing_golden (run 'bless')"; $results += $false; continue }
 		if (-not $p.Actual -or -not (Test-Path $p.Actual)) { Write-Result "PSX_CHECK scene=$SceneName image=$($p.Name) result=fail reason=no_output"; $results += $false; continue }
@@ -318,11 +328,19 @@ function Invoke-Check([string]$SceneName) {
 		Write-Result "PSX_CHECK scene=$SceneName image=baked_in_use result=$(if ($bakedOk) {'pass'} else {'fail'}) baked=$baked expected=$($ExpectBaked[$SceneName])"
 		$results += $bakedOk
 	}
+	if ($ExpectLines.ContainsKey($SceneName)) {
+		$want = $ExpectLines[$SceneName]
+		$got = @($s.psx_lines | Where-Object { $_.StartsWith($want.Split(' ')[0]) } | Select-Object -Last 1)
+		$lineOk = $got.Count -gt 0 -and $got[0].StartsWith($want)
+		Write-Result "PSX_CHECK scene=$SceneName image=script result=$(if ($lineOk) {'pass'} else {'fail'}) line=`"$(if ($got.Count) { $got[0] } else { '' })`""
+		$results += $lineOk
+	}
 	return (-not ($results -contains $false)) -and ($s.exit_code -eq 0) -and -not $s.crashed
 }
 
 function Invoke-Bless([string]$SceneName) {
 	if ($GoldenAliases.ContainsKey($SceneName)) { Write-Result "PSX_BLESS scene=$SceneName result=skip reason=uses_goldens_of_$($GoldenAliases[$SceneName])"; return $true }
+	if ($PsxOffScenes -contains $SceneName) { Write-Result "PSX_BLESS scene=$SceneName result=skip reason=psx_off_no_goldens"; return $true }
 	$s = Invoke-Run $SceneName 'on'
 	$img = Get-RunImages $s
 	if (-not (Test-Path $img.Raw) -or -not (Test-Path $img.Composite)) { Write-Result "PSX_BLESS scene=$SceneName result=fail reason=no_output"; return $false }

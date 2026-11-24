@@ -24,6 +24,8 @@ window frames, `-Stats`, `-Dev`, `-ModelsDir <folder>`, `-ModelsPerCategory 2`.
 | Scene | Covers |
 | --- | --- |
 | `basic` | A box and a sun, with a 2D label over the 3D view |
+| `controls` | The controls: a PSXSettings node turns dither off; one sphere's PSXMaterial3D turns it back on; one box's turns subdivision off; the script sets `default_ambient` through `PSX.set_setting` and must print `PSX_CONTROLS result=pass` |
+| `controls_off` | A PSXSettings node turns the PS1 view off: Godot's renderer draws. Checks that no PSX frames were made (no goldens) and the script's `PSX_CONTROLS` line |
 | `demo` | The built-in cube (`demo.override.cfg` turns on `debug/demo_scene`) |
 | `lighting` | Sun, omni and spot lights, ambient; default, coloured, alpha, emissive, metallic, unshaded and additive materials |
 | `lighting_godot` | The same scene with `lighting_mode` = Godot Match |
@@ -66,6 +68,10 @@ models or renders of them.**
 
 Frame N of the raw dumps and frame N of the movie are the same moment.
 
+Some scenes add checks: `baked_in_use` (the baked texture count),
+`script` (a line the scene's script prints), and `psx_off` (no PSX frames
+when the scene turns the PS1 view off).
+
 ## Unit tests
 
 `unit` compiles `unit/test_psx_core.cpp` with every `psx_core/*.cpp` (MSVC,
@@ -97,6 +103,8 @@ work in any project:
 | Setting | Effect |
 | --- | --- |
 | `rendering/psx/enabled` | Use the PSX renderer (restart needed) |
+| `rendering/psx/active` | Draw 3D with it; off shows Godot's own 3D (live) |
+| `rendering/psx/dither` | The GPU's 4x4 ordered dither (live) |
 | `rendering/psx/vram_scale` | VRAM is (1024 N) x (512 N); 1 is the hardware (restart needed) |
 | `rendering/psx/resolution_width` / `_height` | Display size, default 320 x 240 (restart needed) |
 | `rendering/psx/world_scale` | GTE units per metre, default 512: far limit 65535 / scale metres, near limit H / 2 units |
@@ -130,6 +138,40 @@ as VRAM, so a game that fits in 1 bank also fits on the hardware.
 `PSX_TEXTURES` lines (with `print_stats`) report textured and windowed
 triangles, textures resident (and how many of them were baked), uploads,
 fallbacks, banks in use and free VRAM.
+
+## Controls (on/off, dither and other overrides)
+
+`rendering/psx/enabled` installs the PS1 renderer (restart). Once installed,
+these settings change while running, resolved per viewport every frame,
+later winning:
+
+1. Project settings (`rendering/psx/*`), also in the PSX dock.
+2. A PSXSettings node in the scene: `override_<name>` and `<name>` for each
+   setting, for the World3D it is in (the editor's 3D views use it too).
+3. Scripts: `PSX.set_setting("dither", false)`, `PSX.clear_setting(...)`,
+   `PSX.set_active(false)`, `PSX.get_stats()`.
+
+Then PSXMaterial3D (a StandardMaterial3D; Convert to PSXMaterial3D in the
+material's menu) can set dither On or Off and subdivision Off per material.
+
+| Setting | Cost of a change |
+| --- | --- |
+| `active` | None: off hands the frame to Godot's own renderer |
+| `dither` | None |
+| `lighting_mode`, `default_ambient` | None |
+| `world_scale`, `subdivide_size` | The meshes drawn are converted again (one-frame hitch) |
+| `texture_max_size`, `texture_depth`, `texture_max_colors` | The textures drawn are converted again (baked textures are not) |
+
+Resolution, `vram_scale` and texture banks need a restart.
+
+The PSX dock (right, next to the Inspector) shows whether the renderer is in
+use, turns it on (with Restart Editor), switches the editor's views between
+the PS1 picture and Godot's ("PS1 view in the editor", not saved), edits the
+settings above and shows the last frame's statistics.
+
+Dither is draw-mode state on the PS1 (GP0 E1h; a polygon's texpage does not
+carry it): the frame's drawing environment sets the resolved value, and a
+mesh whose material differs switches it around each of its triangles.
 
 ## Baked textures (PSX Texture importer)
 

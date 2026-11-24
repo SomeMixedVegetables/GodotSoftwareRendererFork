@@ -93,7 +93,13 @@ struct DrawParams {
 	// classes decide (opaque, 50% or hidden); other modes blend every triangle.
 	bool semi = false;
 	uint8_t blend = 0; // BlendMode for semi-transparent meshes
+	// The GPU's 4x4 ordered dither for this mesh (shaded and textured
+	// polygons; flat untextured ones never dither). Dither is draw-mode
+	// state (GP0 E1h; a polygon's texpage does not carry it): frame_dither
+	// is what the frame's drawing environment set. When the two differ,
+	// each triangle is wrapped in E1h commands that switch it and back.
 	bool dither = true;
+	bool frame_dither = true;
 	// Textured meshes (MeshData::textured) are drawn with this texture; null
 	// draws them untextured. The vertex colour then modulates the texel, with
 	// 128 = 1.0, so lights brighter than 1.0 can overbright up to 2x.

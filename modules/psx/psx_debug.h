@@ -23,35 +23,43 @@ struct PSXDebug {
 	bool print_stats = false;
 
 	static void define_settings() {
+		// Live: active switches between the PS1 picture and Godot's own 3D
+		// without a restart (rendering/psx/enabled installs the renderer);
+		// dither is the GPU's ordered dither. Both can be overridden per scene
+		// (PSXSettings) and by scripts (PSX.set_setting); see psx_settings.h.
+		GLOBAL_DEF_BASIC("rendering/psx/active", true);
+		GLOBAL_DEF_BASIC("rendering/psx/dither", true);
 		// Display and VRAM (restart needed). With vram_scale N, VRAM is
 		// (1024 N) x (512 N) and coordinate limits grow by N; 1 is the hardware.
 		GLOBAL_DEF_RST(PropertyInfo(Variant::INT, "rendering/psx/vram_scale", PROPERTY_HINT_RANGE, "1,4,1"), 1);
 		GLOBAL_DEF_RST(PropertyInfo(Variant::INT, "rendering/psx/resolution_width", PROPERTY_HINT_RANGE, "64,4096,1"), 320);
 		GLOBAL_DEF_RST(PropertyInfo(Variant::INT, "rendering/psx/resolution_height", PROPERTY_HINT_RANGE, "64,2048,1"), 240);
+		// The settings below change without a restart (the next frame
+		// converts what it draws again when a rebuild setting changes).
 		// Scene conversion. world_scale: GTE units per metre. 16-bit screen Z
 		// makes the far limit 65535 / world_scale metres, and the near limit
 		// is H / 2 units (about 0.15 m at 512 and 320x240).
-		GLOBAL_DEF_RST(PropertyInfo(Variant::FLOAT, "rendering/psx/world_scale", PROPERTY_HINT_RANGE, "16,4096,1"), 512.0);
+		GLOBAL_DEF(PropertyInfo(Variant::FLOAT, "rendering/psx/world_scale", PROPERTY_HINT_RANGE, "16,4096,1"), 512.0);
 		// Lighting maths. PS1: the GTE's NCCS, display colour times light
 		// (darker midtones, as on the hardware). Godot match: the light level
 		// applied to linear colour, so lit surfaces match Godot's brightness.
-		GLOBAL_DEF_RST(PropertyInfo(Variant::INT, "rendering/psx/lighting_mode", PROPERTY_HINT_ENUM, "PS1,Godot Match"), 0);
+		GLOBAL_DEF(PropertyInfo(Variant::INT, "rendering/psx/lighting_mode", PROPERTY_HINT_ENUM, "PS1,Godot Match"), 0);
 		// Meshes are subdivided until no edge is longer than this (metres; 0 =
 		// off), so big polygons sort, near-clip and light like small ones.
-		GLOBAL_DEF_RST(PropertyInfo(Variant::FLOAT, "rendering/psx/subdivide_size", PROPERTY_HINT_RANGE, "0,16,0.05,or_greater"), 1.0);
+		GLOBAL_DEF(PropertyInfo(Variant::FLOAT, "rendering/psx/subdivide_size", PROPERTY_HINT_RANGE, "0,16,0.05,or_greater"), 1.0);
 		// Textures, converted once when first drawn (design doc, section 11).
 		// max_size: largest side in texels (bigger ones are scaled down).
 		// depth: Auto picks 4-bit when 16 colours are enough, else 8-bit with
 		// a median-cut palette. max_colors: palette size limit, 0 = 16 or 256.
-		GLOBAL_DEF_RST(PropertyInfo(Variant::INT, "rendering/psx/textures/max_size", PROPERTY_HINT_ENUM, "8:8,16:16,32:32,64:64,128:128,256:256"), 256);
-		GLOBAL_DEF_RST(PropertyInfo(Variant::INT, "rendering/psx/textures/depth", PROPERTY_HINT_ENUM, "Auto,4-bit,8-bit,15-bit"), 0);
-		GLOBAL_DEF_RST(PropertyInfo(Variant::INT, "rendering/psx/textures/max_colors", PROPERTY_HINT_RANGE, "0,256,1"), 0);
+		GLOBAL_DEF(PropertyInfo(Variant::INT, "rendering/psx/textures/max_size", PROPERTY_HINT_ENUM, "8:8,16:16,32:32,64:64,128:128,256:256"), 256);
+		GLOBAL_DEF(PropertyInfo(Variant::INT, "rendering/psx/textures/depth", PROPERTY_HINT_ENUM, "Auto,4-bit,8-bit,15-bit"), 0);
+		GLOBAL_DEF(PropertyInfo(Variant::INT, "rendering/psx/textures/max_colors", PROPERTY_HINT_RANGE, "0,256,1"), 0);
 		// Texture memory in 1024 x 512 banks. 1 is the PS1: textures share
 		// VRAM's texture region and the least recently used are evicted when
 		// it is full. More banks (a GP0 extension) hold textures beyond it.
 		GLOBAL_DEF_RST(PropertyInfo(Variant::INT, "rendering/psx/textures/vram_banks", PROPERTY_HINT_ENUM, "1 (PS1):1,2:2,4:4,8:8,16:16,Unlimited:0"), 0);
 		// Ambient light when the scene has no WorldEnvironment.
-		GLOBAL_DEF_RST("rendering/psx/default_ambient", Color(0.2, 0.2, 0.2));
+		GLOBAL_DEF("rendering/psx/default_ambient", Color(0.2, 0.2, 0.2));
 		// Draw the built-in test cube instead of the scene.
 		GLOBAL_DEF_RST("rendering/psx/debug/demo_scene", false);
 		GLOBAL_DEF(PropertyInfo(Variant::INT, "rendering/psx/debug/demo_speed_percent", PROPERTY_HINT_RANGE, "0,400,1"), 100);

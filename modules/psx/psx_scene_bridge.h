@@ -27,6 +27,7 @@
 #include "psx_core/psx_ot.h"
 #include "psx_core/psx_render.h"
 #include "psx_core/psx_texture.h"
+#include "psx_settings.h"
 #include "psx_texture_resource.h"
 
 #include "core/io/image.h"
@@ -75,10 +76,14 @@ struct PSXMaterialInfo {
 	uint8_t billboard = BILLBOARD_NONE;
 	bool billboard_keep_scale = false;
 	int32_t render_priority = 0; // Material render_priority: higher draws over lower
+	// PSXMaterial3D overrides (PSXMaterialOverrides::Dither; DEFAULT = the
+	// resolved dither setting). no_subdivide is baked into meshes.
+	uint8_t dither = 0;
+	bool no_subdivide = false;
 
 	uint32_t hash() const { // Of what is baked into converted meshes.
 		uint32_t h = hash_murmur3_one_32((uint32_t)cull);
-		h = hash_murmur3_one_32((lit ? 1u : 0u) | (semi ? 2u : 0u) | (vertex_colors ? 4u : 0u) | (vertex_colors_srgb ? 8u : 0u) | ((uint32_t)blend << 4) | (texture_repeat ? 1u << 8 : 0u), h);
+		h = hash_murmur3_one_32((lit ? 1u : 0u) | (semi ? 2u : 0u) | (vertex_colors ? 4u : 0u) | (vertex_colors_srgb ? 8u : 0u) | ((uint32_t)blend << 4) | (texture_repeat ? 1u << 8 : 0u) | (no_subdivide ? 1u << 9 : 0u), h);
 		h = hash_murmur3_one_float(albedo.r, h);
 		h = hash_murmur3_one_float(albedo.g, h);
 		h = hash_murmur3_one_float(albedo.b, h);
@@ -240,6 +245,7 @@ struct PSXSceneSettings {
 	psx::TextureOptions texture; // max_size, depth, max_colors (alpha set per material)
 	// Texture banks (1024 x 512 each, bank 0 = VRAM); 0 = as many as needed.
 	uint32_t texture_banks = 0;
+	bool dither = true; // Unless a material says otherwise
 };
 
 struct PSXSceneStats {
@@ -520,6 +526,11 @@ private:
 				material = p_storage->mesh_surface_get_material(p_mesh, surface);
 			}
 			surface_mats[surface] = psx_read_material<ShaderDataT>(material);
+			if (material.is_valid()) {
+				const PSXMaterialOverrides o = PSXSettingsRegistry::get_material(material);
+				surface_mats[surface].dither = o.dither;
+				surface_mats[surface].no_subdivide = o.no_subdivide;
+			}
 			const uint8_t group = surface_mats[surface].billboard | (surface_mats[surface].billboard_keep_scale ? 4 : 0);
 			surface_groups[surface] = group;
 			groups_used |= 1u << group;
@@ -667,6 +678,8 @@ private:
 			params.cull = mat.cull;
 			params.lit = mat.lit;
 			params.lighting = settings.lighting;
+			params.frame_dither = settings.dither; // The frame's drawing environment (PSXSceneRenderRD)
+			params.dither = mat.dither == PSXMaterialOverrides::DITHER_DEFAULT ? settings.dither : mat.dither == PSXMaterialOverrides::DITHER_ON;
 			const Color em = Color(MIN(mat.emission.r, 1.0f), MIN(mat.emission.g, 1.0f), MIN(mat.emission.b, 1.0f)).linear_to_srgb();
 			params.emission[0] = _to_byte(em.r);
 			params.emission[1] = _to_byte(em.g);
@@ -782,7 +795,7 @@ private:
 		opt.use_vertex_colors = p_mat.vertex_colors;
 		opt.vertex_colors_srgb = p_mat.vertex_colors_srgb;
 		opt.use_alpha = p_mat.semi && p_mat.blend == psx::BLEND_HALF;
-		opt.max_edge = settings.subdivide_size * settings.world_scale;
+		opt.max_edge = p_mat.no_subdivide ? 0.0f : settings.subdivide_size * settings.world_scale;
 		opt.normal_scale[0] = (float)p_normal_scale.x;
 		opt.normal_scale[1] = (float)p_normal_scale.y;
 		opt.normal_scale[2] = (float)p_normal_scale.z;
@@ -890,6 +903,9 @@ private:
 
 	const psx::MeshData *_get_converted(MeshEntry &p_entry, uint32_t p_surface, int32_t p_bucket, double p_scale, const PSXMaterialInfo &p_mat, const psx::TextureData *p_texture, const Vector3 &p_normal_scale, PSXSceneStats &r_stats) {
 		uint32_t h = p_mat.hash();
+		// Settings that change while running (PSXLiveSettings) re-convert.
+		h = hash_murmur3_one_float(settings.world_scale, h);
+		h = hash_murmur3_one_float(p_mat.no_subdivide ? 0.0f : settings.subdivide_size, h);
 		for (int a = 0; a < 3; a++) {
 			h = hash_murmur3_one_float((float)p_normal_scale[a], h);
 		}
@@ -1015,6 +1031,7 @@ private:
 		h = hash_murmur3_one_float(p_mat.alpha_mode == psx::ALPHA_CUT ? p_mat.alpha_cut : 0.0f, h);
 		h = hash_murmur3_one_32((uint32_t)start[0] | (uint32_t)start[1] << 16, h);
 		h = hash_murmur3_one_32((uint32_t)extent[0] | (uint32_t)extent[1] << 16, h);
+		h = hash_murmur3_one_32((uint32_t)settings.texture.max_size | (uint32_t)settings.texture.depth << 16 | (uint32_t)settings.texture.max_colors << 20, h);
 		const uint64_t id = p_mat.texture.get_id();
 		const uint64_t key = ((uint64_t)hash_murmur3_one_64(id, h) << 32) | (id & 0xFFFFFFFFu);
 		TextureUse *use = texture_uses.getptr(key);

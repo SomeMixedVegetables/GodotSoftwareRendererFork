@@ -178,6 +178,9 @@ void draw_mesh(GTE &p_gte, PacketBuilder &p_builder, OrderingTable &p_ot, const 
 		p_gte.far_color = LVector();
 	}
 	const uint32_t add_mode_word = 0xE1000000u | GP0Encoder::texpage(0, 0, 0, BLEND_ADD, p_params.dither);
+	// Dither other than the frame's: set before each triangle, restored after.
+	const bool own_dither = p_params.dither != p_params.frame_dither;
+	const uint32_t restore_mode_word = 0xE1000000u | GP0Encoder::texpage(0, 0, 0, BLEND_HALF, p_params.frame_dither);
 	const uint16_t add_texpage = tex ? (uint16_t)((tex->texpage & ~(3u << 5)) | (BLEND_ADD << 5)) : 0;
 
 	for (uint32_t t = 0; t < tri_count; t++) {
@@ -355,7 +358,7 @@ void draw_mesh(GTE &p_gte, PacketBuilder &p_builder, OrderingTable &p_ot, const 
 		}
 
 		// Packets in drawing order; added to the bucket in reverse (it is LIFO).
-		uint32_t order[8];
+		uint32_t order[12];
 		int count = 0;
 		bool full = false;
 		auto push = [&](uint32_t p_packet) {
@@ -375,8 +378,9 @@ void draw_mesh(GTE &p_gte, PacketBuilder &p_builder, OrderingTable &p_ot, const 
 		if (windowed) {
 			push(p_builder.raw_words(&tex->window_word, 1));
 		}
-		if (semi && !tex) {
-			// Untextured polygons blend with the current draw mode.
+		if ((semi && !tex) || own_dither) {
+			// Untextured polygons blend with the current draw mode; it also
+			// carries the dither.
 			push(p_builder.raw_words(&mode_word, 1));
 		}
 		push(p_builder.polygon(verts, 3, flags, clut, texpage));
@@ -398,6 +402,9 @@ void draw_mesh(GTE &p_gte, PacketBuilder &p_builder, OrderingTable &p_ot, const 
 			ff.shaded = true;
 			push(p_builder.raw_words(&add_mode_word, 1));
 			push(p_builder.polygon(fog_verts, 3, ff));
+		}
+		if (own_dither) {
+			push(p_builder.raw_words(&restore_mode_word, 1));
 		}
 		if (full) {
 			r_stats.arena_full++;
