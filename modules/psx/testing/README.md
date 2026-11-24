@@ -33,10 +33,13 @@ window frames, `-Stats`, `-Dev`, `-ModelsDir <folder>`, `-ModelsPerCategory 2`.
 | `gltf_baked` | The same model imported with `psx/bake_textures` on (checker set to Never). Checked against `gltf_runtime`'s goldens and must report exactly 2 baked textures |
 | `fog_multimesh` | Depth fog, sky fog, a MultiMesh grid and a large subdivided ground |
 | `ortho` | An orthographic camera |
+| `overlay` | A ring on layer 21 (where the editor puts gizmos and the grid): Godot's renderer draws it over the PS1 frame, in the composite only. Run with `-Renderer mobile` to check the overlay on Mobile |
+| `particles` | Particle billboards on a MultiMesh with custom data (as CPUParticles3D makes them): each arrow turned by its custom data X, as in Godot |
 | `skinned` | A two-bone mesh built in code, bent every frame (CPU skinning) |
 | `sprites` | Sprite3D, AnimatedSprite3D and Label3D, with and without billboarding, and a billboard material |
 | `shaders` | ShaderMaterial: colour and texture uniforms, unshaded, alpha, vertex displacement, computed colour |
 | `split` | Two SubViewports on one world (split screen) and a third with its own world |
+| `texture_stress` | Two viewports on one world need 24 textures of 128 x 128 at 15-bit with one bank, more than VRAM holds. Fails unless the last frame of each viewport uploads nothing (no thrashing); the 4 that do not fit are drawn in their average colour |
 | `textured` | Procedural textures: repeating floor, a 256 x 256 wall split along tile edges, alpha scissor, alpha blend, a clamped decal, unshaded, fog and an omni light |
 | `textured_baked` | `textured` with every texture baked by `PSXTexture.bake` (what the PSX Texture importer does). Checked against `textured`'s goldens: baking must not change a pixel. Also fails unless `PSX_TEXTURES` reports baked textures in use |
 | `ext_models` | Third-party models from `-ModelsDir` (see below) |
@@ -69,8 +72,9 @@ models or renders of them.**
 Frame N of the raw dumps and frame N of the movie are the same moment.
 
 Some scenes add checks: `baked_in_use` (the baked texture count),
-`script` (a line the scene's script prints), and `psx_off` (no PSX frames
-when the scene turns the PS1 view off).
+`script` (a line the scene's script prints), `psx_off` (no PSX frames
+when the scene turns the PS1 view off) and `textures_settled` (no texture
+uploads in each viewport's last frame).
 
 ## Unit tests
 

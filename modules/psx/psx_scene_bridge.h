@@ -49,8 +49,11 @@
 // How a material turns its mesh toward the camera (BaseMaterial3D billboard_mode).
 enum PSXBillboard : uint8_t {
 	BILLBOARD_NONE = 0,
-	BILLBOARD_ENABLED = 1, // Faces the camera (particle billboards too, without their spin)
+	BILLBOARD_ENABLED = 1, // Faces the camera
 	BILLBOARD_FIXED_Y = 2, // Turns about Y only
+	// Faces the camera, turned about the view axis by the instance's custom
+	// data X (radians), as CPUParticles3D writes it (INSTANCE_CUSTOM.x).
+	BILLBOARD_PARTICLES = 3,
 };
 
 struct PSXMaterialInfo {
@@ -153,8 +156,10 @@ PSXMaterialInfo psx_read_material(RID p_material) {
 		}
 		// Billboards are done in the vertex shader; the bridge turns the
 		// instance to face the camera instead (_billboard).
-		if (sd->code.contains("// Billboard Mode: Enabled") || sd->code.contains("// Billboard Mode: Particles")) {
+		if (sd->code.contains("// Billboard Mode: Enabled")) {
 			info.billboard = BILLBOARD_ENABLED;
+		} else if (sd->code.contains("// Billboard Mode: Particles")) {
+			info.billboard = BILLBOARD_PARTICLES;
 		} else if (sd->code.contains("// Billboard Mode: Y-Billboard")) {
 			info.billboard = BILLBOARD_FIXED_Y;
 		}
@@ -507,7 +512,8 @@ private:
 	// One mesh instance (or one multimesh instance) at p_transform. Surfaces
 	// whose material is a billboard are drawn with their own transform,
 	// turned to the camera as Godot's billboard vertex code does.
-	void _draw_instance(Frame &f, RendererRD::MeshStorage *p_storage, const RenderGeometryInstanceBase *p_inst, RID p_mesh, const Transform3D &p_transform) {
+	// p_spin: the instance's custom data X, for particle billboards.
+	void _draw_instance(Frame &f, RendererRD::MeshStorage *p_storage, const RenderGeometryInstanceBase *p_inst, RID p_mesh, const Transform3D &p_transform, float p_spin = 0.0f) {
 		MeshEntry *entry = _get_mesh(p_storage, p_mesh);
 		if (!entry) {
 			return;
@@ -537,7 +543,7 @@ private:
 		}
 		for (uint8_t group = 0; group < 8; group++) {
 			if (groups_used & (1u << group)) {
-				const Transform3D xform = (group & 3) ? _billboard(f, p_transform, group & 3, (group & 4) != 0) : p_transform;
+				const Transform3D xform = (group & 3) ? _billboard(f, p_transform, group & 3, (group & 4) != 0, p_spin) : p_transform;
 				_draw_surfaces(f, p_storage, p_inst, *entry, xform, group);
 			}
 		}
@@ -545,13 +551,17 @@ private:
 
 	// p_transform with its rotation replaced by the camera's (keeping the
 	// scale when asked), as BaseMaterial3D's billboard modes do.
-	static Transform3D _billboard(const Frame &f, const Transform3D &p_transform, uint8_t p_mode, bool p_keep_scale) {
+	static Transform3D _billboard(const Frame &f, const Transform3D &p_transform, uint8_t p_mode, bool p_keep_scale, float p_spin) {
 		const Vector3 cam_x = f.cam_basis.get_column(0);
 		const Vector3 cam_z = f.cam_basis.get_column(2);
 		Basis b = f.cam_basis;
 		if (p_mode == BILLBOARD_FIXED_Y) {
 			const Vector3 up(0, 1, 0);
 			b = Basis(up.cross(cam_z).normalized(), up, cam_x.cross(up).normalized());
+		} else if (p_mode == BILLBOARD_PARTICLES && p_spin != 0.0f) {
+			// The shader's rotation matrix turns local X to (cos, -sin):
+			// a turn of -spin about the view axis.
+			b = b * Basis(Vector3(0, 0, 1), -p_spin);
 		}
 		if (p_keep_scale) {
 			b.scale_local(Vector3(p_transform.basis.get_column(0).length(), p_transform.basis.get_column(1).length(), p_transform.basis.get_column(2).length()));
@@ -718,11 +728,15 @@ private:
 			return;
 		}
 		const int stride = buffer.size() / total;
+		// Per instance: 12 transform floats, then 4 colour floats when used,
+		// then 4 custom data floats when used.
+		const int custom = p_storage->multimesh_uses_custom_data(mm) ? 12 + (p_storage->multimesh_uses_colors(mm) ? 4 : 0) : -1;
 		const float *r = buffer.ptr();
 		for (int k = 0; k < visible; k++) {
 			const float *d = r + k * stride;
 			const Transform3D local(Basis(d[0], d[1], d[2], d[4], d[5], d[6], d[8], d[9], d[10]), Vector3(d[3], d[7], d[11]));
-			_draw_instance(f, p_storage, p_inst, mesh, p_inst->transform * local);
+			const float spin = (custom >= 0 && custom < stride) ? d[custom] : 0.0f;
+			_draw_instance(f, p_storage, p_inst, mesh, p_inst->transform * local, spin);
 		}
 	}
 

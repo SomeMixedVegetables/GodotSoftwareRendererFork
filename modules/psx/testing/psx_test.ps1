@@ -101,6 +101,11 @@ $ExpectLines = @{ 'controls' = 'PSX_CONTROLS result=pass'; 'controls_off' = 'PSX
 # Scenes that switch the PS1 view off (PSXSettings active = false): Godot's
 # own renderer draws, so there are no PSX frames and no goldens.
 $PsxOffScenes = @('controls_off')
+# Scenes whose textures must settle: the last PSX_TEXTURES line of each
+# viewport (the last two lines) must report uploads=0, so nothing is being
+# evicted and uploaded again every frame. Their override.cfg turns on
+# print_stats.
+$ExpectSettled = @('texture_stress')
 
 function Get-GoldenDir([string]$SceneName) {
 	if ($GoldenAliases.ContainsKey($SceneName)) { $SceneName = $GoldenAliases[$SceneName] }
@@ -327,6 +332,14 @@ function Invoke-Check([string]$SceneName) {
 		$bakedOk = $baked -eq $ExpectBaked[$SceneName]
 		Write-Result "PSX_CHECK scene=$SceneName image=baked_in_use result=$(if ($bakedOk) {'pass'} else {'fail'}) baked=$baked expected=$($ExpectBaked[$SceneName])"
 		$results += $bakedOk
+	}
+	if ($ExpectSettled -contains $SceneName) {
+		$tex = @($s.psx_lines | Where-Object { $_ -match '^PSX_TEXTURES' } | Select-Object -Last 2)
+		$uploads = @($tex | ForEach-Object { if ($_ -match 'uploads=(\d+)') { [int]$Matches[1] } else { -1 } })
+		$fallbacks = @($tex | ForEach-Object { if ($_ -match 'fallbacks=(\d+)') { [int]$Matches[1] } else { -1 } })
+		$settled = $tex.Count -eq 2 -and -not ($uploads | Where-Object { $_ -ne 0 })
+		Write-Result "PSX_CHECK scene=$SceneName image=textures_settled result=$(if ($settled) {'pass'} else {'fail'}) uploads=$($uploads -join ',') fallbacks=$($fallbacks -join ',')"
+		$results += $settled
 	}
 	if ($ExpectLines.ContainsKey($SceneName)) {
 		$want = $ExpectLines[$SceneName]
