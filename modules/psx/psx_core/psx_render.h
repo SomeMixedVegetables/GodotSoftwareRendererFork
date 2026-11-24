@@ -49,6 +49,10 @@ struct PointLight {
 
 static constexpr int MAX_POINT_LIGHTS = 4;
 
+// How many times draw_mesh may split a triangle that is too big for the GPU
+// or the screen coordinate range (each split makes four pieces).
+static constexpr int NEAR_SPLIT_DEPTH = 4;
+
 // Where a textured mesh's texture sits in VRAM (from VramAllocator), as the
 // polygon fields that address it.
 struct DrawTexture {
@@ -77,6 +81,9 @@ struct DrawParams {
 	CullMode cull = CULL_BACK;
 	bool lit = true; // Lighting on; otherwise the baked colour as-is
 	LightingMode lighting = LIGHTING_PS1;
+	// Multiplies the mesh's baked colours before lighting, sRGB 0..255
+	// (255 = unchanged): a MultiMesh instance's colour.
+	uint8_t tint[3] = { 255, 255, 255 };
 	// Added after lighting, sRGB 0..255 (material emission).
 	uint8_t emission[3] = { 0, 0, 0 };
 	const PointLight *point_lights = nullptr;
@@ -93,6 +100,8 @@ struct DrawParams {
 	// classes decide (opaque, 50% or hidden); other modes blend every triangle.
 	bool semi = false;
 	uint8_t blend = 0; // BlendMode for semi-transparent meshes
+	// With BLEND_HALF: blend every triangle, ignoring the alpha classes.
+	bool semi_whole = false;
 	// The GPU's 4x4 ordered dither for this mesh (shaded and textured
 	// polygons; flat untextured ones never dither). Dither is draw-mode
 	// state (GP0 E1h; a polygon's texpage does not carry it): frame_dither
@@ -124,7 +133,9 @@ struct DrawParams {
 
 struct DrawStats {
 	uint32_t triangles_in = 0;
-	uint32_t culled_near = 0;
+	uint32_t culled_near = 0; // Triangles and pieces dropped at the near plane
+	uint32_t near_clips = 0; // Triangles cut at the near plane
+	uint32_t near_splits = 0; // Pieces split for being too big for the GPU or the screen range
 	uint32_t culled_far = 0;
 	uint32_t culled_backface = 0;
 	uint32_t culled_offscreen = 0;

@@ -24,9 +24,11 @@ window frames, `-Stats`, `-Dev`, `-ModelsDir <folder>`, `-ModelsPerCategory 2`.
 | Scene | Covers |
 | --- | --- |
 | `basic` | A box and a sun, with a 2D label over the 3D view |
+| `blend_modes` | PSXMaterial3D `psx_blend` over black, grey and white bands: Material (opaque), Half, Add, Subtract and Add Quarter, on flat and textured quads. Godot draws them opaque (the setting is PS1-only) |
 | `controls` | The controls: a PSXSettings node turns dither off; one sphere's PSXMaterial3D turns it back on; one box's turns subdivision off; the script sets `default_ambient` through `PSX.set_setting` and must print `PSX_CONTROLS result=pass` |
 | `controls_off` | A PSXSettings node turns the PS1 view off: Godot's renderer draws. Checks that no PSX frames were made (no goldens) and the script's `PSX_CONTROLS` line |
 | `demo` | The built-in cube (`demo.override.cfg` turns on `debug/demo_scene`) |
+| `near_plane` | A low camera over a floor and beside a wall that both pass behind it: their triangles are clipped at the near plane, so they reach the screen edges with no holes or cracks. One floor has subdivision off (one big quad) |
 | `lighting` | Sun, omni and spot lights, ambient; default, coloured, alpha, emissive, metallic, unshaded and additive materials |
 | `lighting_godot` | The same scene with `lighting_mode` = Godot Match |
 | `gltf_runtime` | `models/psx_quads_runtime.gltf`: three quads with embedded textures (opaque, alpha-scissor at 0.3, checker), converted when drawn |
@@ -35,11 +37,13 @@ window frames, `-Stats`, `-Dev`, `-ModelsDir <folder>`, `-ModelsPerCategory 2`.
 | `ortho` | An orthographic camera |
 | `overlay` | A ring on layer 21 (where the editor puts gizmos and the grid): Godot's renderer draws it over the PS1 frame, in the composite only. Run with `-Renderer mobile` to check the overlay on Mobile |
 | `particles` | Particle billboards on a MultiMesh with custom data (as CPUParticles3D makes them): each arrow turned by its custom data X, as in Godot |
+| `particles_anim` | Particle animation frames (a 4 x 2 sheet, frames picked by custom data Z, clamped and looped) and per-instance MultiMesh colours on a material that uses vertex colour |
 | `skinned` | A two-bone mesh built in code, bent every frame (CPU skinning) |
 | `sprites` | Sprite3D, AnimatedSprite3D and Label3D, with and without billboarding, and a billboard material |
 | `shaders` | ShaderMaterial: colour and texture uniforms, unshaded, alpha, vertex displacement, computed colour |
 | `split` | Two SubViewports on one world (split screen) and a third with its own world |
 | `texture_stress` | Two viewports on one world need 24 textures of 128 x 128 at 15-bit with one bank, more than VRAM holds. Fails unless the last frame of each viewport uploads nothing (no thrashing); the 4 that do not fit are drawn in their average colour |
+| `texture_update` | Textures changed at frame 10: an ImageTexture by `update()`, one by `set_image()` with a bigger image, and a ViewportTexture whose SubViewport changes. All three must show their new images |
 | `textured` | Procedural textures: repeating floor, a 256 x 256 wall split along tile edges, alpha scissor, alpha blend, a clamped decal, unshaded, fog and an omni light |
 | `textured_baked` | `textured` with every texture baked by `PSXTexture.bake` (what the PSX Texture importer does). Checked against `textured`'s goldens: baking must not change a pixel. Also fails unless `PSX_TEXTURES` reports baked textures in use |
 | `ext_models` | Third-party models from `-ModelsDir` (see below) |
@@ -238,10 +242,14 @@ preview)`.
 - Of the environment, only ambient light, the background colour and depth or
   exponential fog are read. Sky textures, glow, tonemapping, SSAO, volumetric
   fog and global illumination (SDFGI, VoxelGI, lightmaps) are ignored.
-- Decals, particles and blend shapes are not drawn.
-- A triangle that crosses the near plane is dropped whole, not clipped.
-  Subdivision hides this most of the time; large polygons very close to the
-  camera can still pop out.
+- Decals and blend shapes are not drawn. Particles draw through their
+  MultiMesh (CPUParticles3D), with billboard spin, animation frames and
+  instance colours; GPUParticles3D is not drawn.
+- Triangles that cross the near plane are clipped there, and ones too big
+  for the GPU are split, so the GTE and GPU limits do not drop them.
+- A ViewportTexture is read back from the GPU and converted (at 15-bit) every
+  frame it is drawn, which costs a GPU sync; other textures are read again
+  only when they change.
 - There is no depth buffer: polygons are sorted by average depth in the
   ordering table, as on the PS1, so overlapping or crossing polygons can sort
   wrongly. This is intended.
@@ -253,8 +261,6 @@ preview)`.
 - Fog on textured surfaces is drawn as a second, additive pass: the texel
   fades to black and the fog colour is added on top.
 - Emission is multiplied by the texel colour.
-- A texture is converted once per RID; changes to its image afterwards are
-  not seen.
 - Point lights on non-uniformly scaled meshes are approximate.
 - Only VisualInstance3D layers 1-20 go through the PSX core. In the editor,
   the helpers on layers 21-32 (grid, origin axes, gizmos, selection boxes)

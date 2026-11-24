@@ -419,6 +419,40 @@ static void test_draw_mesh() {
 	DrawStats sn;
 	run(m, 100, params, sn);
 	CHECK_EQ(sn.culled_near, 2);
+	CHECK_EQ(sn.near_clips, 0); // Wholly nearer: nothing to cut.
+
+	// A floor running from behind the camera to far ahead crosses the near
+	// plane: split into pieces, the ones in front drawn, down to the bottom
+	// of the screen (Z = 160 at y = 200).
+	{
+		const float floor_pos[] = { -100, 50, -300, 100, 50, -300, -100, 50, 1700, 100, 50, 1700 };
+		const float floor_nrm[] = { 0, -1, 0, 0, -1, 0, 0, -1, 0, 0, -1, 0 };
+		MeshInput fin = in;
+		fin.positions = floor_pos;
+		fin.normals = floor_nrm;
+		fin.indices = front;
+		MeshData mf;
+		CHECK(convert_mesh(fin, opt, mf));
+		DrawParams pf;
+		pf.cull = CULL_NONE;
+		DrawStats sfl;
+		CHECK_EQ(run(mf, 0, pf, sfl), 0); // Screen centre: the horizon, above the floor
+		CHECK(sfl.near_clips > 0);
+		CHECK(sfl.packets > 0);
+		GPU g;
+		GTE gte = basic_gte();
+		gte.ambient = { 4096, 4096, 4096 };
+		PacketArena arena(1u << 14);
+		PacketBuilder pb(arena, g.get_encoder());
+		OrderingTable ot(arena, 256);
+		ot.clear();
+		ot.add(255, pb.environment(0, 0, 319, 239, 0, 0, GP0Encoder::texpage(0, 0, 0, 0, false)));
+		DrawStats s2;
+		draw_mesh(gte, pb, ot, mf, pf, s2);
+		ot.draw(g);
+		CHECK_EQ(g.vram_get(160, 200), rgb15(0, 31, 0));
+		CHECK_EQ(g.vram_get(160, 140), rgb15(0, 31, 0));
+	}
 	// Beyond the far plane: dropped.
 	params.far_z = 500;
 	DrawStats sfar;

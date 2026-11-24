@@ -60,10 +60,18 @@ public:
 		SUBDIVIDE_PROJECT, // rendering/psx/subdivide_size (or its override)
 		SUBDIVIDE_OFF,
 	};
+	enum PSXBlend {
+		PSX_BLEND_MATERIAL, // Godot's blend mode and transparency
+		PSX_BLEND_HALF,
+		PSX_BLEND_ADD,
+		PSX_BLEND_SUBTRACT,
+		PSX_BLEND_ADD_QUARTER,
+	};
 
 private:
 	Dither psx_dither = DITHER_PROJECT;
 	Subdivide psx_subdivide = SUBDIVIDE_PROJECT;
+	PSXBlend psx_blend = PSX_BLEND_MATERIAL;
 	RID registered_rid;
 
 	void _update_registration();
@@ -76,9 +84,12 @@ public:
 	Dither get_psx_dither() const;
 	void set_psx_subdivide(Subdivide p_subdivide);
 	Subdivide get_psx_subdivide() const;
+	void set_psx_blend(PSXBlend p_blend);
+	PSXBlend get_psx_blend() const;
 
 	~PSXMaterial3D();
 };
 
 VARIANT_ENUM_CAST(PSXMaterial3D::Dither);
 VARIANT_ENUM_CAST(PSXMaterial3D::Subdivide);
+VARIANT_ENUM_CAST(PSXMaterial3D::PSXBlend);

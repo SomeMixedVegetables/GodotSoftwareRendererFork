@@ -66,6 +66,11 @@ struct ConvertOptions {
 	// uv' = uv * uv_scale + uv_offset (StandardMaterial3D's uv1_scale/offset).
 	float uv_scale[2] = { 1.0f, 1.0f };
 	float uv_offset[2] = { 0.0f, 0.0f };
+	// Repeating textures: keep a texel coordinate equal to the texture size
+	// (its far edge) and use the texture window, instead of pulling it in to
+	// size - 1, so every frame of a sprite sheet spans the same number of
+	// texels (particle animation frames). Not repeating: pulled in as usual.
+	bool keep_far_edge = false;
 };
 
 // How a triangle of an alpha-blended mesh is drawn. The PS1 has one alpha

@@ -189,6 +189,7 @@ void PSXMaterial3D::_update_registration() {
 	PSXMaterialOverrides o;
 	o.dither = psx_dither == DITHER_ON ? PSXMaterialOverrides::DITHER_ON : (psx_dither == DITHER_OFF ? PSXMaterialOverrides::DITHER_OFF : PSXMaterialOverrides::DITHER_DEFAULT);
 	o.no_subdivide = psx_subdivide == SUBDIVIDE_OFF;
+	o.blend = (uint8_t)psx_blend; // Same order as PSXMaterialOverrides::Blend
 	if (o.is_default()) {
 		if (registered_rid.is_valid()) {
 			PSXSettingsRegistry::remove_material(registered_rid);
@@ -218,21 +219,38 @@ PSXMaterial3D::Subdivide PSXMaterial3D::get_psx_subdivide() const {
 	return psx_subdivide;
 }
 
+void PSXMaterial3D::set_psx_blend(PSXBlend p_blend) {
+	psx_blend = p_blend;
+	_update_registration();
+}
+
+PSXMaterial3D::PSXBlend PSXMaterial3D::get_psx_blend() const {
+	return psx_blend;
+}
+
 void PSXMaterial3D::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("set_psx_dither", "dither"), &PSXMaterial3D::set_psx_dither);
 	ClassDB::bind_method(D_METHOD("get_psx_dither"), &PSXMaterial3D::get_psx_dither);
 	ClassDB::bind_method(D_METHOD("set_psx_subdivide", "subdivide"), &PSXMaterial3D::set_psx_subdivide);
 	ClassDB::bind_method(D_METHOD("get_psx_subdivide"), &PSXMaterial3D::get_psx_subdivide);
+	ClassDB::bind_method(D_METHOD("set_psx_blend", "blend"), &PSXMaterial3D::set_psx_blend);
+	ClassDB::bind_method(D_METHOD("get_psx_blend"), &PSXMaterial3D::get_psx_blend);
 
 	ADD_GROUP("PSX", "psx_");
 	ADD_PROPERTY(PropertyInfo(Variant::INT, "psx_dither", PROPERTY_HINT_ENUM, "Project Setting,On,Off"), "set_psx_dither", "get_psx_dither");
 	ADD_PROPERTY(PropertyInfo(Variant::INT, "psx_subdivide", PROPERTY_HINT_ENUM, "Project Setting,Off"), "set_psx_subdivide", "get_psx_subdivide");
+	ADD_PROPERTY(PropertyInfo(Variant::INT, "psx_blend", PROPERTY_HINT_ENUM, "Material,Half,Add,Subtract,Add Quarter"), "set_psx_blend", "get_psx_blend");
 
 	BIND_ENUM_CONSTANT(DITHER_PROJECT);
 	BIND_ENUM_CONSTANT(DITHER_ON);
 	BIND_ENUM_CONSTANT(DITHER_OFF);
 	BIND_ENUM_CONSTANT(SUBDIVIDE_PROJECT);
 	BIND_ENUM_CONSTANT(SUBDIVIDE_OFF);
+	BIND_ENUM_CONSTANT(PSX_BLEND_MATERIAL);
+	BIND_ENUM_CONSTANT(PSX_BLEND_HALF);
+	BIND_ENUM_CONSTANT(PSX_BLEND_ADD);
+	BIND_ENUM_CONSTANT(PSX_BLEND_SUBTRACT);
+	BIND_ENUM_CONSTANT(PSX_BLEND_ADD_QUARTER);
 }
 
 PSXMaterial3D::~PSXMaterial3D() {

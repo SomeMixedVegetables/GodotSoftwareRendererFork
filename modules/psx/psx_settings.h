@@ -91,9 +91,18 @@ struct PSXMaterialOverrides {
 		DITHER_ON = 1,
 		DITHER_OFF = 2,
 	};
+	// The PS1 blend mode, replacing the material's own transparency.
+	enum Blend : uint8_t {
+		BLEND_MATERIAL = 0, // From Godot's blend mode and transparency
+		BLEND_HALF = 1, // B/2 + F/2 on every triangle
+		BLEND_ADD = 2, // B + F
+		BLEND_SUBTRACT = 3, // B - F
+		BLEND_ADD_QUARTER = 4, // B + F/4
+	};
 	uint8_t dither = DITHER_DEFAULT;
 	bool no_subdivide = false;
-	bool is_default() const { return dither == DITHER_DEFAULT && !no_subdivide; }
+	uint8_t blend = BLEND_MATERIAL;
+	bool is_default() const { return dither == DITHER_DEFAULT && !no_subdivide && blend == BLEND_MATERIAL; }
 };
 
 // The last frame the PSX renderer drew, for the dock and PSX.get_stats().

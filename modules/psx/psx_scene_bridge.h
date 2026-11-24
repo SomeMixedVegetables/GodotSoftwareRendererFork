@@ -78,15 +78,24 @@ struct PSXMaterialInfo {
 	// Not baked into meshes (they change the transform or the sort only).
 	uint8_t billboard = BILLBOARD_NONE;
 	bool billboard_keep_scale = false;
+	// Particles Anim (particles_anim_*): the texture is a sheet of h x v
+	// frames, picked per instance by its custom data Z.
+	bool anim = false;
+	bool anim_loop = false;
+	int32_t anim_h = 1;
+	int32_t anim_v = 1;
 	int32_t render_priority = 0; // Material render_priority: higher draws over lower
 	// PSXMaterial3D overrides (PSXMaterialOverrides::Dither; DEFAULT = the
 	// resolved dither setting). no_subdivide is baked into meshes.
 	uint8_t dither = 0;
 	bool no_subdivide = false;
+	// Blend every triangle at 50% (PSXMaterial3D psx_blend Half), instead
+	// of by its alpha.
+	bool semi_whole = false;
 
 	uint32_t hash() const { // Of what is baked into converted meshes.
 		uint32_t h = hash_murmur3_one_32((uint32_t)cull);
-		h = hash_murmur3_one_32((lit ? 1u : 0u) | (semi ? 2u : 0u) | (vertex_colors ? 4u : 0u) | (vertex_colors_srgb ? 8u : 0u) | ((uint32_t)blend << 4) | (texture_repeat ? 1u << 8 : 0u) | (no_subdivide ? 1u << 9 : 0u), h);
+		h = hash_murmur3_one_32((lit ? 1u : 0u) | (semi ? 2u : 0u) | (vertex_colors ? 4u : 0u) | (vertex_colors_srgb ? 8u : 0u) | ((uint32_t)blend << 4) | (texture_repeat ? 1u << 8 : 0u) | (no_subdivide ? 1u << 9 : 0u) | (anim ? 1u << 10 : 0u) | (semi_whole ? 1u << 11 : 0u), h);
 		h = hash_murmur3_one_float(albedo.r, h);
 		h = hash_murmur3_one_float(albedo.g, h);
 		h = hash_murmur3_one_float(albedo.b, h);
@@ -164,6 +173,7 @@ PSXMaterialInfo psx_read_material(RID p_material) {
 			info.billboard = BILLBOARD_FIXED_Y;
 		}
 		info.billboard_keep_scale = sd->code.contains("// Billboard Keep Scale: Enabled");
+		info.anim = sd->code.contains("particle_total_frames");
 		using U = ShaderLanguage::ShaderNode::Uniform;
 		if (!sd->uniforms.has(color_param)) {
 			int best = INT_MAX;
@@ -235,12 +245,33 @@ PSXMaterialInfo psx_read_material(RID p_material) {
 			info.emission = Color(c.r, c.g, c.b);
 		}
 	}
+	if (info.anim) {
+		const Variant h = param("particles_anim_h_frames");
+		const Variant v = param("particles_anim_v_frames");
+		const Variant loop = param("particles_anim_loop");
+		info.anim_h = h.get_type() == Variant::INT ? CLAMP((int32_t)h, 1, 128) : 1;
+		info.anim_v = v.get_type() == Variant::INT ? CLAMP((int32_t)v, 1, 128) : 1;
+		info.anim_loop = loop.get_type() == Variant::BOOL && (bool)loop;
+		// Every particle billboard has the animation code; one frame is
+		// an ordinary texture.
+		info.anim = info.anim_h * info.anim_v > 1;
+	}
 	const Variant metallic = ms->material_get_param(p_material, "metallic");
 	if (metallic.get_type() == Variant::FLOAT) {
 		info.metallic = CLAMP((float)metallic, 0.0f, 1.0f);
 	}
 	return info;
 }
+
+// What a MultiMesh gives each instance besides its transform.
+struct PSXInstanceData {
+	float spin = 0.0f; // Custom data X: particle billboard rotation (radians)
+	float anim = 0.0f; // Custom data Z: particle animation phase (0..1 = the whole sheet)
+	// Instance colour; multiplies COLOR, so only materials that use vertex
+	// colour as albedo show it (as in Godot).
+	Color color = Color(1, 1, 1, 1);
+	bool has_color = false;
+};
 
 struct PSXSceneSettings {
 	float world_scale = 512.0f; // GTE units per metre
@@ -481,6 +512,7 @@ private:
 		Vector2 uv_scale = Vector2(1, 1);
 		Vector2 uv_offset;
 		uint64_t last_used = 0;
+		uint64_t version = 0; // The source texture's content version it was converted from
 	};
 	HashMap<uint64_t, TextureUse> texture_uses;
 
@@ -488,6 +520,7 @@ private:
 	struct SourceImage {
 		Ref<Image> image;
 		uint64_t last_used = 0;
+		uint64_t version = 0; // TextureStorage::texture_get_content_version when read
 	};
 	HashMap<RID, SourceImage> source_images;
 
@@ -512,8 +545,8 @@ private:
 	// One mesh instance (or one multimesh instance) at p_transform. Surfaces
 	// whose material is a billboard are drawn with their own transform,
 	// turned to the camera as Godot's billboard vertex code does.
-	// p_spin: the instance's custom data X, for particle billboards.
-	void _draw_instance(Frame &f, RendererRD::MeshStorage *p_storage, const RenderGeometryInstanceBase *p_inst, RID p_mesh, const Transform3D &p_transform, float p_spin = 0.0f) {
+	// p_data: the MultiMesh instance's colour and custom data.
+	void _draw_instance(Frame &f, RendererRD::MeshStorage *p_storage, const RenderGeometryInstanceBase *p_inst, RID p_mesh, const Transform3D &p_transform, const PSXInstanceData &p_data = PSXInstanceData()) {
 		MeshEntry *entry = _get_mesh(p_storage, p_mesh);
 		if (!entry) {
 			return;
@@ -536,6 +569,18 @@ private:
 				const PSXMaterialOverrides o = PSXSettingsRegistry::get_material(material);
 				surface_mats[surface].dither = o.dither;
 				surface_mats[surface].no_subdivide = o.no_subdivide;
+				if (o.blend != PSXMaterialOverrides::BLEND_MATERIAL) {
+					// The PS1 mode replaces Godot's transparency; a texture's
+					// alpha still cuts holes.
+					static const uint8_t modes[] = { psx::BLEND_HALF, psx::BLEND_HALF, psx::BLEND_ADD, psx::BLEND_SUBTRACT, psx::BLEND_ADD_QUARTER };
+					PSXMaterialInfo &m = surface_mats[surface];
+					m.semi = true;
+					m.blend = modes[MIN(o.blend, (uint8_t)4)];
+					m.semi_whole = o.blend == PSXMaterialOverrides::BLEND_HALF;
+					if (m.alpha_mode == psx::ALPHA_BLEND) {
+						m.alpha_mode = psx::ALPHA_CUT;
+					}
+				}
 			}
 			const uint8_t group = surface_mats[surface].billboard | (surface_mats[surface].billboard_keep_scale ? 4 : 0);
 			surface_groups[surface] = group;
@@ -543,8 +588,8 @@ private:
 		}
 		for (uint8_t group = 0; group < 8; group++) {
 			if (groups_used & (1u << group)) {
-				const Transform3D xform = (group & 3) ? _billboard(f, p_transform, group & 3, (group & 4) != 0, p_spin) : p_transform;
-				_draw_surfaces(f, p_storage, p_inst, *entry, xform, group);
+				const Transform3D xform = (group & 3) ? _billboard(f, p_transform, group & 3, (group & 4) != 0, p_data.spin) : p_transform;
+				_draw_surfaces(f, p_storage, p_inst, *entry, xform, group, p_data);
 			}
 		}
 	}
@@ -570,7 +615,7 @@ private:
 	}
 
 	// The surfaces of p_entry in billboard group p_group (surface_groups).
-	void _draw_surfaces(Frame &f, RendererRD::MeshStorage *p_storage, const RenderGeometryInstanceBase *p_inst, MeshEntry &r_entry, const Transform3D &p_transform, uint8_t p_group) {
+	void _draw_surfaces(Frame &f, RendererRD::MeshStorage *p_storage, const RenderGeometryInstanceBase *p_inst, MeshEntry &r_entry, const Transform3D &p_transform, uint8_t p_group, const PSXInstanceData &p_data) {
 		MeshEntry *entry = &r_entry;
 		const Transform3D view = f.cam_inv * p_transform;
 		const Basis &b = view.basis;
@@ -616,7 +661,17 @@ private:
 				continue;
 			}
 			PSXMaterialInfo mat = surface_mats[surface];
-			TextureEntry *tex = _get_texture(mat, src, *f.stats);
+			// Particles Anim: the frame's part of the sheet (BaseMaterial3D's
+			// vertex code), between the material's UV transform and the crop.
+			Vector2 anim_scale(1, 1), anim_offset;
+			if (mat.anim) {
+				const int32_t total = mat.anim_h * mat.anim_v;
+				int32_t frame_index = (int32_t)std::floor(p_data.anim * (float)total);
+				frame_index = mat.anim_loop ? Math::posmod(frame_index, total) : CLAMP(frame_index, 0, total - 1);
+				anim_scale = Vector2(1.0f / mat.anim_h, 1.0f / mat.anim_v);
+				anim_offset = Vector2((float)(frame_index % mat.anim_h) / mat.anim_h, (float)(frame_index / mat.anim_h) / mat.anim_v);
+			}
+			TextureEntry *tex = _get_texture(mat, src, *f.stats, anim_scale, anim_offset);
 			if (tex && !tex->placed) {
 				// No room in VRAM: untextured, tinted by the texture's average colour.
 				f.stats->texture_fallbacks++;
@@ -694,8 +749,17 @@ private:
 			params.emission[0] = _to_byte(em.r);
 			params.emission[1] = _to_byte(em.g);
 			params.emission[2] = _to_byte(em.b);
+			if (p_data.has_color && mat.vertex_colors) {
+				// COLOR times the instance colour, as a tint on the baked
+				// display colour: linear COLOR goes to sRGB first.
+				for (int ch = 0; ch < 3; ch++) {
+					const float c = CLAMP(p_data.color[ch], 0.0f, 1.0f);
+					params.tint[ch] = _to_byte(mat.vertex_colors_srgb ? c : psx::linear_to_srgb(c));
+				}
+			}
 			params.fog = f.fog;
 			params.semi = mat.semi;
+			params.semi_whole = mat.semi_whole;
 			params.blend = mat.blend;
 			params.texture = tex ? &tex->draw[mat.blend & 3] : nullptr;
 			params.ortho = f.ortho;
@@ -730,13 +794,23 @@ private:
 		const int stride = buffer.size() / total;
 		// Per instance: 12 transform floats, then 4 colour floats when used,
 		// then 4 custom data floats when used.
-		const int custom = p_storage->multimesh_uses_custom_data(mm) ? 12 + (p_storage->multimesh_uses_colors(mm) ? 4 : 0) : -1;
+		const bool uses_colors = p_storage->multimesh_uses_colors(mm);
+		const int color = uses_colors ? 12 : -1;
+		const int custom = p_storage->multimesh_uses_custom_data(mm) ? 12 + (uses_colors ? 4 : 0) : -1;
 		const float *r = buffer.ptr();
 		for (int k = 0; k < visible; k++) {
 			const float *d = r + k * stride;
 			const Transform3D local(Basis(d[0], d[1], d[2], d[4], d[5], d[6], d[8], d[9], d[10]), Vector3(d[3], d[7], d[11]));
-			const float spin = (custom >= 0 && custom < stride) ? d[custom] : 0.0f;
-			_draw_instance(f, p_storage, p_inst, mesh, p_inst->transform * local, spin);
+			PSXInstanceData data;
+			if (color >= 0 && color + 4 <= stride) {
+				data.color = Color(d[color], d[color + 1], d[color + 2], d[color + 3]);
+				data.has_color = true;
+			}
+			if (custom >= 0 && custom + 4 <= stride) {
+				data.spin = d[custom];
+				data.anim = d[custom + 2];
+			}
+			_draw_instance(f, p_storage, p_inst, mesh, p_inst->transform * local, data);
 		}
 	}
 
@@ -808,7 +882,7 @@ private:
 		opt.albedo[3] = p_mat.albedo.a;
 		opt.use_vertex_colors = p_mat.vertex_colors;
 		opt.vertex_colors_srgb = p_mat.vertex_colors_srgb;
-		opt.use_alpha = p_mat.semi && p_mat.blend == psx::BLEND_HALF;
+		opt.use_alpha = p_mat.semi && p_mat.blend == psx::BLEND_HALF && !p_mat.semi_whole;
 		opt.max_edge = p_mat.no_subdivide ? 0.0f : settings.subdivide_size * settings.world_scale;
 		opt.normal_scale[0] = (float)p_normal_scale.x;
 		opt.normal_scale[1] = (float)p_normal_scale.y;
@@ -821,6 +895,7 @@ private:
 			opt.uv_scale[1] = p_mat.uv_scale.y;
 			opt.uv_offset[0] = p_mat.uv_offset.x;
 			opt.uv_offset[1] = p_mat.uv_offset.y;
+			opt.keep_far_edge = p_mat.anim;
 		}
 		return opt;
 	}
@@ -947,7 +1022,9 @@ private:
 	// cannot be read; placed is false when texture memory is full even after
 	// evicting textures not used this frame. Updates p_mat's UV transform for
 	// the crop.
-	TextureEntry *_get_texture(PSXMaterialInfo &p_mat, const SourceSurface &p_src, PSXSceneStats &r_stats) {
+	// p_anim_scale/offset (particle animation frames) apply after the crop is
+	// chosen, so every frame of a sheet shares one converted texture.
+	TextureEntry *_get_texture(PSXMaterialInfo &p_mat, const SourceSurface &p_src, PSXSceneStats &r_stats, const Vector2 &p_anim_scale = Vector2(1, 1), const Vector2 &p_anim_offset = Vector2()) {
 		RendererRD::TextureStorage *ts = RendererRD::TextureStorage::get_singleton();
 		if (!p_mat.texture.is_valid() || !ts->owns_texture(p_mat.texture) || p_src.uvs.is_empty()) {
 			return nullptr;
@@ -987,7 +1064,10 @@ private:
 		if (!e->placed && frame >= e->retry_frame) {
 			_place_texture(*e, r_stats);
 		}
-		// Surface UVs -> crop UVs, after the material's own transform.
+		// Surface UVs -> crop UVs, after the material's own transform and
+		// the animation frame.
+		p_mat.uv_scale = p_mat.uv_scale * p_anim_scale;
+		p_mat.uv_offset = p_mat.uv_offset * p_anim_scale + p_anim_offset;
 		p_mat.uv_offset = p_mat.uv_offset * use->uv_scale + use->uv_offset;
 		p_mat.uv_scale = p_mat.uv_scale * use->uv_scale;
 		return e;
@@ -1048,11 +1128,22 @@ private:
 		h = hash_murmur3_one_32((uint32_t)settings.texture.max_size | (uint32_t)settings.texture.depth << 16 | (uint32_t)settings.texture.max_colors << 20, h);
 		const uint64_t id = p_mat.texture.get_id();
 		const uint64_t key = ((uint64_t)hash_murmur3_one_64(id, h) << 32) | (id & 0xFFFFFFFFu);
+		const uint64_t version = ts->texture_get_content_version(p_mat.texture);
 		TextureUse *use = texture_uses.getptr(key);
-		if (!use) {
+		if (use && use->version != version) {
+			// The texture changed since (ImageTexture.update or set_image, a
+			// ViewportTexture's new frame): convert it again.
+			_release_content(key, use->content);
+			*use = TextureUse();
+		} else if (!use) {
 			use = &texture_uses.insert(key, TextureUse())->value;
+		} else {
+			return use;
+		}
+		{
+			use->version = version;
 			psx::TextureData data;
-			use->valid = _convert_texture(image, Rect2i(start[0], start[1], extent[0], extent[1]), p_mat, data);
+			use->valid = _convert_texture(image, Rect2i(start[0], start[1], extent[0], extent[1]), p_mat, ts->texture_is_render_target(p_mat.texture), data);
 			r_stats.conversions++;
 			if (use->valid) {
 				for (int a = 0; a < 2; a++) {
@@ -1065,13 +1156,34 @@ private:
 		return use;
 	}
 
+	// Frees p_content's texture memory now unless another use (other than
+	// p_key) still draws it.
+	void _release_content(uint64_t p_key, uint64_t p_content) {
+		for (const KeyValue<uint64_t, TextureUse> &kv : texture_uses) {
+			if (kv.key != p_key && kv.value.content == p_content && kv.value.valid) {
+				return;
+			}
+		}
+		TextureEntry *e = textures.getptr(p_content);
+		if (e) {
+			_unplace_texture(*e);
+			textures.erase(p_content);
+		}
+	}
+
 	Ref<Image> _source_image(RendererRD::TextureStorage *p_storage, RID p_texture) {
+		const uint64_t version = p_storage->texture_get_content_version(p_texture);
 		SourceImage *found = source_images.getptr(p_texture);
-		if (found) {
+		if (found && found->version == version) {
 			found->last_used = frame;
 			return found->image;
 		}
-		SourceImage &entry = source_images.insert(p_texture, SourceImage())->value;
+		if (!found) {
+			found = &source_images.insert(p_texture, SourceImage())->value;
+		}
+		SourceImage &entry = *found;
+		entry.image = Ref<Image>();
+		entry.version = version;
 		entry.last_used = frame;
 		const Ref<Image> source = p_storage->texture_2d_get(p_texture);
 		if (source.is_null() || source->is_empty()) {
@@ -1093,9 +1205,15 @@ private:
 		return image;
 	}
 
-	bool _convert_texture(const Ref<Image> &p_image, const Rect2i &p_crop, const PSXMaterialInfo &p_mat, psx::TextureData &r_data) const {
+	// p_dynamic: a render target, converted again every frame it changes:
+	// 15-bit (no palette to build), as a PS1 game would copy a rendered
+	// image from the frame buffer.
+	bool _convert_texture(const Ref<Image> &p_image, const Rect2i &p_crop, const PSXMaterialInfo &p_mat, bool p_dynamic, psx::TextureData &r_data) const {
 		const Ref<Image> crop = (p_crop.position == Point2i() && p_crop.size == p_image->get_size()) ? p_image : p_image->get_region(p_crop);
 		psx::TextureOptions opt = settings.texture;
+		if (p_dynamic) {
+			opt.depth = psx::DEPTH_FORCE_15BIT;
+		}
 		opt.alpha_mode = p_mat.alpha_mode;
 		opt.alpha_cut = p_mat.alpha_cut;
 		const Vector<uint8_t> bytes = crop->get_data();

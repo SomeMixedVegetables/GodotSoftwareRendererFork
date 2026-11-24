@@ -551,7 +551,10 @@ static bool convert_direct(const MeshInput &p_input, const ConvertOptions &p_opt
 						c[axis][corner] -= tile;
 						last = std::max(last, c[axis][corner]);
 					}
-					windowed = windowed || (last > size && size < 256 && last <= 255);
+					// Sprite sheets keep the far edge, and wrap it (as Godot's
+					// repeat does) rather than read past the texture.
+					const int64_t past = p_options.keep_far_edge ? size - 1 : size;
+					windowed = windowed || (last > past && size < 256 && last <= 255);
 				}
 			}
 			for (int axis = 0; axis < 2; axis++) {
