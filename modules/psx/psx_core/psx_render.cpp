@@ -2,6 +2,7 @@
 
 #include "psx_convert.h"
 
+#include <algorithm>
 #include <cmath>
 
 namespace psx {
@@ -232,7 +233,7 @@ void draw_mesh(GTE &p_gte, PacketBuilder &p_builder, OrderingTable &p_ot, const 
 		}
 
 		p_gte.avsz3();
-		const uint32_t otz = (uint32_t)p_gte.otz >> p_params.ot_shift;
+		const uint32_t otz = (uint32_t)std::clamp((int32_t)((uint32_t)p_gte.otz >> p_params.ot_shift) + p_params.ot_bias, 0, (int32_t)p_ot.get_size() - 1);
 
 		PacketBuilder::Vert verts[3];
 		int16_t fog_amount[3] = { 0, 0, 0 }; // IR0 per vertex, 4096 = full fog

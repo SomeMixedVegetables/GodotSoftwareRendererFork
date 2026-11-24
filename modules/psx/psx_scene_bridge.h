@@ -44,6 +44,13 @@
 #include <cmath>
 
 // What the PSX path takes from a Godot material.
+// How a material turns its mesh toward the camera (BaseMaterial3D billboard_mode).
+enum PSXBillboard : uint8_t {
+	BILLBOARD_NONE = 0,
+	BILLBOARD_ENABLED = 1, // Faces the camera (particle billboards too, without their spin)
+	BILLBOARD_FIXED_Y = 2, // Turns about Y only
+};
+
 struct PSXMaterialInfo {
 	psx::CullMode cull = psx::CULL_BACK;
 	bool lit = true;
@@ -63,6 +70,10 @@ struct PSXMaterialInfo {
 	Vector2 uv_offset;
 	uint8_t alpha_mode = psx::ALPHA_IGNORE;
 	float alpha_cut = 0.5f;
+	// Not baked into meshes (they change the transform or the sort only).
+	uint8_t billboard = BILLBOARD_NONE;
+	bool billboard_keep_scale = false;
+	int32_t render_priority = 0; // Material render_priority: higher draws over lower
 
 	uint32_t hash() const { // Of what is baked into converted meshes.
 		uint32_t h = hash_murmur3_one_32((uint32_t)cull);
@@ -80,6 +91,12 @@ struct PSXMaterialInfo {
 	}
 };
 
+// The renderer's MaterialData type for its ShaderData type (both nested in
+// the same scene-shader class); specialised where the renderers are known
+// (psx_compositor_rd.cpp). MaterialData holds the render priority.
+template <class ShaderDataT>
+struct PSXMaterialDataOf;
+
 // Reads cull mode, shading, blending and vertex-colour use from the compiled
 // scene shader (ShaderDataT is the active renderer's ShaderData), and the
 // albedo, emission and metallic uniforms of StandardMaterial3D/ORMMaterial3D.
@@ -95,8 +112,15 @@ PSXMaterialInfo psx_read_material(RID p_material) {
 	}
 	info.albedo = Color(1, 1, 1, 1); // Custom shaders without an albedo uniform.
 	using SD = RendererRD::MaterialStorage::ShaderData;
+	using MD = typename PSXMaterialDataOf<ShaderDataT>::Type;
+	const MD *md = static_cast<const MD *>(ms->material_get_data(p_material, RendererRD::MaterialStorage::SHADER_TYPE_3D));
+	info.render_priority = (int32_t)md->priority + RSE::MATERIAL_RENDER_PRIORITY_MIN; // Stored as 0..255
 	const ShaderDataT *sd = static_cast<const ShaderDataT *>(ms->material_get_shader_data(p_material));
 	bool emissive = false;
+	// StandardMaterial3D's uniform names; a custom shader's first colour and
+	// texture uniforms marked source_color stand in for them.
+	StringName color_param = "albedo";
+	StringName texture_param = "texture_albedo";
 	if (sd) {
 		const int cull = (int)sd->cull_mode;
 		info.cull = cull == RSE::CULL_MODE_DISABLED ? psx::CULL_NONE : (cull == RSE::CULL_MODE_FRONT ? psx::CULL_FRONT : psx::CULL_BACK);
@@ -121,14 +145,47 @@ PSXMaterialInfo psx_read_material(RID p_material) {
 		} else if (info.semi && info.blend == psx::BLEND_HALF) {
 			info.alpha_mode = psx::ALPHA_BLEND;
 		}
+		// Billboards are done in the vertex shader; the bridge turns the
+		// instance to face the camera instead (_billboard).
+		if (sd->code.contains("// Billboard Mode: Enabled") || sd->code.contains("// Billboard Mode: Particles")) {
+			info.billboard = BILLBOARD_ENABLED;
+		} else if (sd->code.contains("// Billboard Mode: Y-Billboard")) {
+			info.billboard = BILLBOARD_FIXED_Y;
+		}
+		info.billboard_keep_scale = sd->code.contains("// Billboard Keep Scale: Enabled");
+		using U = ShaderLanguage::ShaderNode::Uniform;
+		if (!sd->uniforms.has(color_param)) {
+			int best = INT_MAX;
+			for (const KeyValue<StringName, U> &kv : sd->uniforms) {
+				const U &u = kv.value;
+				if (u.scope == U::SCOPE_LOCAL && u.hint == U::HINT_SOURCE_COLOR && (u.type == ShaderLanguage::TYPE_VEC3 || u.type == ShaderLanguage::TYPE_VEC4) && u.prop_order < best) {
+					best = u.prop_order;
+					color_param = kv.key;
+				}
+			}
+		}
+		if (!sd->uniforms.has(texture_param)) {
+			int best = INT_MAX;
+			for (const KeyValue<StringName, U> &kv : sd->uniforms) {
+				const U &u = kv.value;
+				if (u.scope == U::SCOPE_LOCAL && u.use_color && u.type == ShaderLanguage::TYPE_SAMPLER2D && u.texture_order < best) { // source_color on a sampler sets use_color
+					best = u.texture_order;
+					texture_param = kv.key;
+				}
+			}
+		}
 		// The albedo sampler's declaration says whether it repeats.
-		const int decl = sd->code.find("uniform sampler2D texture_albedo");
-		if (decl >= 0) {
-			const int end = sd->code.find(";", decl);
-			info.texture_repeat = !sd->code.substr(decl, end - decl).contains("repeat_disable");
+		const U *tex_uniform = sd->uniforms.getptr(texture_param);
+		if (tex_uniform) {
+			info.texture_repeat = tex_uniform->repeat != ShaderLanguage::REPEAT_DISABLE;
 		}
 	}
-	const Variant texture = ms->material_get_param(p_material, "texture_albedo");
+	// A parameter the material has not set takes the shader's default.
+	auto param = [&](const StringName &p_name) -> Variant {
+		const Variant v = ms->material_get_param(p_material, p_name);
+		return (v.get_type() != Variant::NIL || !sd) ? v : sd->get_default_parameter(p_name);
+	};
+	const Variant texture = param(texture_param);
 	if (texture.get_type() == Variant::RID) {
 		info.texture = texture;
 	}
@@ -148,9 +205,15 @@ PSXMaterialInfo psx_read_material(RID p_material) {
 			info.alpha_cut = CLAMP((float)cut, 0.0f, 1.0f);
 		}
 	}
-	const Variant albedo = ms->material_get_param(p_material, "albedo");
+	const Variant albedo = param(color_param);
 	if (albedo.get_type() == Variant::COLOR) {
 		info.albedo = albedo;
+	} else if (albedo.get_type() == Variant::VECTOR4) {
+		const Vector4 c = albedo;
+		info.albedo = Color(c.x, c.y, c.z, c.w);
+	} else if (albedo.get_type() == Variant::VECTOR3) {
+		const Vector3 c = albedo;
+		info.albedo = Color(c.x, c.y, c.z, 1.0f);
 	}
 	if (emissive) {
 		const Variant emission = ms->material_get_param(p_material, "emission");
@@ -263,6 +326,7 @@ public:
 		f.fog = _setup_fog(p_scene_render, p_environment, proj, f);
 
 		f.cam_inv = p_camera.main_transform.affine_inverse();
+		f.cam_basis = p_camera.main_transform.basis.orthonormalized();
 		RendererRD::MeshStorage *mesh_storage = RendererRD::MeshStorage::get_singleton();
 
 		for (uint32_t i = 0; i < p_instances.size(); i++) {
@@ -348,6 +412,7 @@ private:
 		psx::OrderingTable *ot = nullptr;
 		PSXSceneStats *stats = nullptr;
 		Transform3D cam_inv;
+		Basis cam_basis; // Camera rotation in world space (billboards)
 		double row_scale[3] = { 1.0, -1.0, -1.0 }; // A * C
 		double world = 512.0;
 		bool ortho = false;
@@ -371,6 +436,9 @@ private:
 	Color fog_color;
 	float fog_sky_affect = 0.0f;
 	uint64_t frame = 0;
+	// Per-instance scratch for _draw_instance.
+	LocalVector<PSXMaterialInfo> surface_mats;
+	LocalVector<uint8_t> surface_groups;
 
 	// A converted texture and where it lives in VRAM (or a texture bank),
 	// shared by every use that converts to the same texels and palette. The
@@ -425,14 +493,59 @@ private:
 		return (uint8_t)CLAMP(std::lround(p_value * 255.0f), 0L, 255L);
 	}
 
-	// One mesh instance (or one multimesh instance) at p_transform.
+	// One mesh instance (or one multimesh instance) at p_transform. Surfaces
+	// whose material is a billboard are drawn with their own transform,
+	// turned to the camera as Godot's billboard vertex code does.
 	void _draw_instance(Frame &f, RendererRD::MeshStorage *p_storage, const RenderGeometryInstanceBase *p_inst, RID p_mesh, const Transform3D &p_transform) {
 		MeshEntry *entry = _get_mesh(p_storage, p_mesh);
 		if (!entry) {
 			return;
 		}
 		f.stats->instances++;
+		const uint32_t surface_count = entry->surfaces.size();
+		surface_mats.resize(surface_count);
+		surface_groups.resize(surface_count);
+		uint32_t groups_used = 0;
+		for (uint32_t surface = 0; surface < surface_count; surface++) {
+			RID material = p_inst->data->material_override;
+			if (!material.is_valid() && surface < (uint32_t)p_inst->data->surface_materials.size()) {
+				material = p_inst->data->surface_materials[surface];
+			}
+			if (!material.is_valid()) {
+				material = p_storage->mesh_surface_get_material(p_mesh, surface);
+			}
+			surface_mats[surface] = psx_read_material<ShaderDataT>(material);
+			const uint8_t group = surface_mats[surface].billboard | (surface_mats[surface].billboard_keep_scale ? 4 : 0);
+			surface_groups[surface] = group;
+			groups_used |= 1u << group;
+		}
+		for (uint8_t group = 0; group < 8; group++) {
+			if (groups_used & (1u << group)) {
+				const Transform3D xform = (group & 3) ? _billboard(f, p_transform, group & 3, (group & 4) != 0) : p_transform;
+				_draw_surfaces(f, p_storage, p_inst, *entry, xform, group);
+			}
+		}
+	}
 
+	// p_transform with its rotation replaced by the camera's (keeping the
+	// scale when asked), as BaseMaterial3D's billboard modes do.
+	static Transform3D _billboard(const Frame &f, const Transform3D &p_transform, uint8_t p_mode, bool p_keep_scale) {
+		const Vector3 cam_x = f.cam_basis.get_column(0);
+		const Vector3 cam_z = f.cam_basis.get_column(2);
+		Basis b = f.cam_basis;
+		if (p_mode == BILLBOARD_FIXED_Y) {
+			const Vector3 up(0, 1, 0);
+			b = Basis(up.cross(cam_z).normalized(), up, cam_x.cross(up).normalized());
+		}
+		if (p_keep_scale) {
+			b.scale_local(Vector3(p_transform.basis.get_column(0).length(), p_transform.basis.get_column(1).length(), p_transform.basis.get_column(2).length()));
+		}
+		return Transform3D(b, p_transform.origin);
+	}
+
+	// The surfaces of p_entry in billboard group p_group (surface_groups).
+	void _draw_surfaces(Frame &f, RendererRD::MeshStorage *p_storage, const RenderGeometryInstanceBase *p_inst, MeshEntry &r_entry, const Transform3D &p_transform, uint8_t p_group) {
+		MeshEntry *entry = &r_entry;
 		const Transform3D view = f.cam_inv * p_transform;
 		const Basis &b = view.basis;
 		const double s = MAX(MAX(b.get_column(0).length(), b.get_column(1).length()), b.get_column(2).length());
@@ -473,17 +586,10 @@ private:
 
 		for (uint32_t surface = 0; surface < entry->surfaces.size(); surface++) {
 			const SourceSurface &src = entry->surfaces[surface];
-			if (src.vertex_count == 0) {
+			if (src.vertex_count == 0 || surface_groups[surface] != p_group) {
 				continue;
 			}
-			RID material = p_inst->data->material_override;
-			if (!material.is_valid() && surface < (uint32_t)p_inst->data->surface_materials.size()) {
-				material = p_inst->data->surface_materials[surface];
-			}
-			if (!material.is_valid()) {
-				material = p_storage->mesh_surface_get_material(p_mesh, surface);
-			}
-			PSXMaterialInfo mat = psx_read_material<ShaderDataT>(material);
+			PSXMaterialInfo mat = surface_mats[surface];
 			TextureEntry *tex = _get_texture(mat, src, *f.stats);
 			if (tex && !tex->placed) {
 				// No room in VRAM: untextured, tinted by the texture's average colour.
@@ -567,6 +673,7 @@ private:
 			params.ortho = f.ortho;
 			params.near_z = f.near_z;
 			params.ot_shift = f.ot_shift;
+			params.ot_bias = -CLAMP(mat.render_priority, -64, 64);
 			params.far_z = f.far_z;
 			params.screen_width = f.width;
 			params.screen_height = f.height;

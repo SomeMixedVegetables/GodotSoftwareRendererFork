@@ -40,6 +40,7 @@
 #include "servers/rendering/renderer_rd/storage_rd/render_scene_buffers_rd.h"
 #include "servers/rendering/renderer_rd/storage_rd/texture_storage.h"
 #include "servers/rendering/rendering_device.h"
+#include "servers/rendering/rendering_server_globals.h"
 
 template <class Base, class ShaderDataT>
 class PSXSceneRenderRD : public Base {
@@ -117,7 +118,10 @@ class PSXSceneRenderRD : public Base {
 		psx::PacketBuilder pb(arena, gpu->get_encoder());
 		psx::OrderingTable ot(arena, PSXSceneBridge<ShaderDataT>::OT_SIZE);
 		ot.clear();
-		bridge.build(this, p_camera, p_instances, p_lights, p_environment, w, h, *gpu, pb, ot, frame_count, scene_stats);
+		// The bridge counts engine frames, not render_scene() calls: with several
+		// viewports, a texture one of them drew this frame must not be evicted
+		// for another.
+		bridge.build(this, p_camera, p_instances, p_lights, p_environment, w, h, *gpu, pb, ot, RSG::rasterizer->get_frame_number(), scene_stats);
 
 		// Far end: drawing environment, then the clear (the bucket is LIFO,
 		// so the environment, added last, goes first).

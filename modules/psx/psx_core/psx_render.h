@@ -100,6 +100,10 @@ struct DrawParams {
 	const DrawTexture *texture = nullptr;
 	// OTZ = AVSZ3 result >> ot_shift. Triangles nearer than OTZ 1 still land in bucket 0.
 	int32_t ot_shift = 4;
+	// Added to every OTZ after the shift (clamped to the table): negative
+	// sorts the mesh nearer, so it draws over coplanar meshes (a sort bias,
+	// as PS1 games used for decals and outlines).
+	int32_t ot_bias = 0;
 	// Triangles whose every vertex is beyond this SZ are dropped (far plane).
 	int32_t far_z = 0xFFFF;
 	// Orthographic: RT's X/Y rows already map to screen pixels (MVMVA, no

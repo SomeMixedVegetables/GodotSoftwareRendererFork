@@ -25,6 +25,10 @@
 
   Every result line starts with "PSX_" so it is easy to grep.
 
+  -Renderer mobile runs the scenes on Godot's Mobile renderer instead of
+  Forward+ (--rendering-method). Raw PSX frames come from the CPU and must
+  match the same goldens bit for bit.
+
   Per-scene settings: scenes\<name>.override.cfg, if present, adds lines to
   the [rendering] section of override.cfg for that scene's runs.
 
@@ -55,7 +59,9 @@ param(
 	[switch]$Stats,
 	[switch]$Dev,
 	[string]$ModelsDir = '',
-	[int]$ModelsPerCategory = 2
+	[int]$ModelsPerCategory = 2,
+	[ValidateSet('forward_plus', 'mobile')]
+	[string]$Renderer = 'forward_plus'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -205,6 +211,7 @@ function Invoke-Run([string]$SceneName, [string]$RunMode) {
 	Set-Override ($RunMode -eq 'on') $psxDir $SceneName
 	$godotArgs = @('--path', $Project, '--write-movie', (Join-Path $movieDir 'frame.png'),
 		'--fixed-fps', '30', '--quit-after', "$Frames", "res://scenes/$SceneName.tscn")
+	if ($Renderer -ne 'forward_plus') { $godotArgs = @('--rendering-method', $Renderer) + $godotArgs }
 	$r = Invoke-Godot $godotArgs (Join-Path $out 'log.txt') (Join-Path $out 'stderr.txt')
 	Set-Override $false ''
 
@@ -216,6 +223,9 @@ function Invoke-Run([string]$SceneName, [string]$RunMode) {
 	$movie = @(Get-ChildItem $movieDir -Filter '*.png' | Sort-Object Name)
 	$dumps = @(Get-ChildItem $psxDir -Filter '*.png' | Sort-Object Name)
 	$active = [bool]($psxLines -match 'compositor active')
+	if ($RunMode -eq 'on' -and $active -and -not ($psxLines -match "compositor active.*$Renderer")) {
+		Write-Result "PSX_RUN_ERROR scene=$SceneName expected renderer ${Renderer}: $(($psxLines -match 'compositor active') -join ' ')"
+	}
 
 	$summary = [ordered]@{
 		scene = $SceneName; mode = $RunMode; exit_code = $r.Code; crashed = $crashed

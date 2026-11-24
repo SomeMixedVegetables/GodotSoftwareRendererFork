@@ -9,6 +9,7 @@ Run it from the repo root in PowerShell.
 .\modules\psx\testing\psx_test.ps1 unit         # psx_core only, seconds, no Godot build
 .\modules\psx\testing\psx_test.ps1 run -Mode both -Stats
 .\modules\psx\testing\psx_test.ps1 review       # side-by-side sheet: raw | composite | PSX off
+.\modules\psx\testing\psx_test.ps1 check -Renderer mobile   # the same goldens on the Mobile renderer
 .\modules\psx\testing\psx_test.ps1 check        # compare against golden/
 .\modules\psx\testing\psx_test.ps1 bless        # accept current output as golden
 .\modules\psx\testing\psx_test.ps1 build -Dev   # dev build with symbols, for crash traces
@@ -29,6 +30,9 @@ window frames, `-Stats`, `-Dev`, `-ModelsDir <folder>`, `-ModelsPerCategory 2`.
 | `fog_multimesh` | Depth fog, sky fog, a MultiMesh grid and a large subdivided ground |
 | `ortho` | An orthographic camera |
 | `skinned` | A two-bone mesh built in code, bent every frame (CPU skinning) |
+| `sprites` | Sprite3D, AnimatedSprite3D and Label3D, with and without billboarding, and a billboard material |
+| `shaders` | ShaderMaterial: colour and texture uniforms, unshaded, alpha, vertex displacement, computed colour |
+| `split` | Two SubViewports on one world (split screen) and a third with its own world |
 | `textured` | Procedural textures: repeating floor, a 256 x 256 wall split along tile edges, alpha scissor, alpha blend, a clamped decal, unshaded, fog and an omni light |
 | `ext_models` | Third-party models from `-ModelsDir` (see below) |
 
@@ -170,3 +174,19 @@ triangles, textures resident, uploads, fallbacks, banks in use and free VRAM.
   under them, so they show through models, as if every gizmo were "on top".
 - Subdivision stops once a surface reaches about 16,000 triangles, so a very
   large polygon keeps long edges.
+- Billboards (BaseMaterial3D billboard modes, Sprite3D, AnimatedSprite3D,
+  Label3D) are drawn by turning the instance to the camera; particle
+  billboards ignore their spin.
+- Material `render_priority` becomes a sort bias: each step moves a mesh one
+  ordering-table bucket nearer, so it draws over coplanar meshes (Label3D's
+  outline sits behind its text this way). It does not reorder meshes at
+  different depths.
+- ShaderMaterial: the PS1 path does not run shader code. It reads the cull,
+  blend and unshaded render modes, ALPHA use, and the first `vec3`/`vec4`
+  uniform and the first `sampler2D` uniform marked `source_color` as the
+  albedo colour and texture (StandardMaterial3D's `albedo` and
+  `texture_albedo` when present). Vertex displacement and colours computed
+  in code are not drawn.
+- Every viewport (split screen, SubViewports) shares one PS1 GPU and one
+  texture memory; each is drawn at the PSX resolution and stretched to its
+  own size.
