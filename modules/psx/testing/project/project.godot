@@ -20,5 +20,6 @@ renderer/rendering_method="forward_plus"
 [importer_defaults]
 
 scene={
+"gltf/embedded_image_handling": 3,
 "import_script/path": "res://tools/vertex_color_albedo_import.gd"
 }

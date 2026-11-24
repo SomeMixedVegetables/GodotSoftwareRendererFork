@@ -27,6 +27,8 @@ namespace psx {
 constexpr int32_t VRAM_BASE_WIDTH = 1024;
 constexpr int32_t VRAM_BASE_HEIGHT = 512;
 constexpr int MAX_VRAM_SCALE = 4;
+// Extra texture banks (see GPU): at most this many beyond bank 0.
+constexpr uint32_t MAX_TEXTURE_BANKS = 255;
 
 enum BlendMode : uint8_t {
 	BLEND_HALF = 0, // B/2 + F/2
@@ -91,6 +93,9 @@ struct DrawState {
 	// active_field_lsb are skipped (they are on screen).
 	bool interlaced = false;
 	uint8_t active_field_lsb = 0;
+	// Texture bank (GP0 E7h, an extension): which 1024 x 512 store texture
+	// pages, CLUTs and CPU<->VRAM copies address. 0 = VRAM itself.
+	uint16_t texture_bank = 0;
 };
 
 // Builds GP0 words for a GPU of a given scale.
@@ -128,6 +133,8 @@ struct GP0Encoder {
 	uint32_t mask_bits(bool p_set_mask, bool p_check_mask) const {
 		return 0xE6000000u | (p_set_mask ? 1u : 0u) | (p_check_mask ? 2u : 0u);
 	}
+	// Extension: select texture bank p_bank (E7h is a no-op on the hardware).
+	static uint32_t texture_bank(uint32_t p_bank) { return 0xE7000000u | (p_bank & 0xFFFFu); }
 };
 
 class GPU {
@@ -152,6 +159,13 @@ public:
 	void write_gp0(uint32_t p_word);
 	void write_gp0(const uint32_t *p_words, size_t p_count);
 
+	// Texture banks beyond VRAM (bank 0): 1024 x 512 halfwords each, created
+	// when first selected. They hold only textures and CLUTs: a renderer
+	// that runs out of the hardware's texture region can keep going in
+	// them, while bank 0 keeps the hardware's behaviour exactly.
+	uint32_t get_texture_bank_count() const { return 1 + (uint32_t)banks.size(); }
+	uint16_t bank_get(uint32_t p_bank, int32_t p_x, int32_t p_y) const;
+
 	// Halfwords produced by VRAM->CPU copies (GP0 C0h), oldest first.
 	std::vector<uint16_t> &get_readback() { return readback; }
 
@@ -174,6 +188,8 @@ private:
 		int32_t page_x, page_y;
 		int32_t clut_x, clut_y;
 		uint8_t depth;
+		const uint16_t *base; // Bank memory and its row stride
+		int32_t stride;
 	};
 
 	int scale = 1;
@@ -183,6 +199,7 @@ private:
 	int32_t max_height = 512;
 	GP0Encoder encoder;
 	std::vector<uint16_t> vram;
+	std::vector<std::vector<uint16_t>> banks; // Texture banks 1..n
 	std::vector<uint16_t> readback;
 	DrawState state;
 
@@ -213,6 +230,9 @@ private:
 	void _execute_fill();
 	void _execute_copy();
 	void _set_texpage(uint16_t p_bits, bool p_from_polygon);
+	// Bank memory (selected texture bank) and its stride.
+	uint16_t *_bank_memory(int32_t &r_stride, int32_t &r_width, int32_t &r_height);
+	Texture _texture(uint16_t p_clut) const;
 
 	int32_t _vertex_x(uint32_t p_word) const;
 	int32_t _vertex_y(uint32_t p_word) const;

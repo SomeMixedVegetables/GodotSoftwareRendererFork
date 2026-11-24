@@ -77,6 +77,7 @@ GPU::GPU(int p_scale) {
 
 void GPU::reset() {
 	vram.assign((size_t)vram_width * vram_height, 0);
+	banks.clear();
 	readback.clear();
 	state = DrawState();
 	state.area_right = vram_width - 1;
@@ -255,6 +256,18 @@ void GPU::_execute() {
 			state.set_mask = (w & 1) != 0;
 			state.check_mask = (w & 2) != 0;
 			break;
+		case 0xE7: {
+			const uint32_t bank = w & 0xFFFF;
+			state.texture_bank = (uint16_t)(bank > MAX_TEXTURE_BANKS ? 0 : bank);
+			if (state.texture_bank > banks.size()) {
+				banks.resize(state.texture_bank);
+				for (std::vector<uint16_t> &b : banks) {
+					if (b.empty()) {
+						b.assign((size_t)VRAM_BASE_WIDTH * VRAM_BASE_HEIGHT, 0);
+					}
+				}
+			}
+		} break;
 		default:
 			break;
 	}
@@ -311,11 +324,7 @@ void GPU::_execute_polygon() {
 		// A textured polygon writes its texpage into the global draw mode,
 		// which later untextured semi-transparent primitives then use.
 		_set_texpage(texpage, true);
-		tex.page_x = state.page_x;
-		tex.page_y = state.page_y;
-		tex.depth = state.depth;
-		tex.clut_x = (clut & 0x3F) * 16;
-		tex.clut_y = (clut >> 6) & 0x1FF;
+		tex = _texture(clut);
 	}
 	_draw_triangle(v[0], v[1], v[2], shaded, textured, raw, semi, tex);
 	if (quad) {
@@ -551,26 +560,66 @@ void GPU::_rasterize_triangle(const Vertex *p_v0, const Vertex *p_v1, const Vert
 	}
 }
 
+GPU::Texture GPU::_texture(uint16_t p_clut) const {
+	Texture tex = {};
+	tex.page_x = state.page_x;
+	tex.page_y = state.page_y;
+	tex.depth = state.depth;
+	tex.clut_x = (p_clut & 0x3F) * 16;
+	tex.clut_y = (p_clut >> 6) & 0x1FF;
+	if (state.texture_bank > 0 && state.texture_bank <= banks.size()) {
+		tex.base = banks[state.texture_bank - 1].data();
+		tex.stride = VRAM_BASE_WIDTH;
+	} else {
+		tex.base = vram.data();
+		tex.stride = vram_width;
+	}
+	return tex;
+}
+
 uint16_t GPU::_fetch_texel(uint8_t p_u, uint8_t p_v, const Texture &p_tex) const {
 	const uint32_t u = (p_u & state.window_and_x) | state.window_or_x;
 	const uint32_t v = (p_v & state.window_and_y) | state.window_or_y;
-	// Textures and CLUTs live in the 1024x512 texture region and wrap there.
-	const size_t row = (size_t)((p_tex.page_y + (int32_t)v) & 511) * vram_width;
-	const size_t clut_row = (size_t)p_tex.clut_y * vram_width;
+	// Textures and CLUTs live in the 1024x512 texture region (of VRAM or of
+	// the selected texture bank) and wrap there.
+	const uint16_t *mem = p_tex.base;
+	const size_t row = (size_t)((p_tex.page_y + (int32_t)v) & 511) * p_tex.stride;
+	const size_t clut_row = (size_t)p_tex.clut_y * p_tex.stride;
 	switch (p_tex.depth) {
 		case TEXTURE_4BIT: {
-			const uint16_t word = vram[row + ((p_tex.page_x + (int32_t)(u >> 2)) & 1023)];
+			const uint16_t word = mem[row + ((p_tex.page_x + (int32_t)(u >> 2)) & 1023)];
 			const uint32_t index = (word >> ((u & 3) * 4)) & 0xF;
-			return vram[clut_row + ((p_tex.clut_x + index) & 1023)];
+			return mem[clut_row + ((p_tex.clut_x + index) & 1023)];
 		}
 		case TEXTURE_8BIT: {
-			const uint16_t word = vram[row + ((p_tex.page_x + (int32_t)(u >> 1)) & 1023)];
+			const uint16_t word = mem[row + ((p_tex.page_x + (int32_t)(u >> 1)) & 1023)];
 			const uint32_t index = (word >> ((u & 1) * 8)) & 0xFF;
-			return vram[clut_row + ((p_tex.clut_x + index) & 1023)];
+			return mem[clut_row + ((p_tex.clut_x + index) & 1023)];
 		}
 		default:
-			return vram[row + ((p_tex.page_x + (int32_t)u) & 1023)];
+			return mem[row + ((p_tex.page_x + (int32_t)u) & 1023)];
 	}
+}
+
+uint16_t GPU::bank_get(uint32_t p_bank, int32_t p_x, int32_t p_y) const {
+	if (p_bank == 0) {
+		return vram_get(p_x, p_y);
+	}
+	if (p_bank > banks.size()) {
+		return 0;
+	}
+	return banks[p_bank - 1][(size_t)(p_y & 511) * VRAM_BASE_WIDTH + (p_x & 1023)];
+}
+
+uint16_t *GPU::_bank_memory(int32_t &r_stride, int32_t &r_width, int32_t &r_height) {
+	if (state.texture_bank > 0 && state.texture_bank <= banks.size()) {
+		r_stride = r_width = VRAM_BASE_WIDTH;
+		r_height = VRAM_BASE_HEIGHT;
+		return banks[state.texture_bank - 1].data();
+	}
+	r_stride = r_width = vram_width;
+	r_height = vram_height;
+	return vram.data();
 }
 
 uint16_t GPU::_blend(uint16_t p_back, uint16_t p_front) const {
@@ -739,11 +788,7 @@ void GPU::_execute_rectangle() {
 		u0 = (uint8_t)t;
 		v0 = (uint8_t)(t >> 8);
 		const uint16_t clut = (uint16_t)(t >> 16);
-		tex.page_x = state.page_x;
-		tex.page_y = state.page_y;
-		tex.depth = state.depth;
-		tex.clut_x = (clut & 0x3F) * 16;
-		tex.clut_y = (clut >> 6) & 0x1FF;
+		tex = _texture(clut);
 	}
 	int32_t w, h;
 	switch (size_code) {
@@ -874,20 +919,25 @@ void GPU::_execute_copy() {
 		size(cmd[2], transfer_w, transfer_h);
 		transfer_col = transfer_row = 0;
 		transfer_remaining = (uint32_t)transfer_w * (uint32_t)transfer_h;
-	} else { // VRAM -> CPU.
+	} else { // VRAM -> CPU (from the selected texture bank).
 		int32_t sx, sy, w, h;
 		pos(cmd[1], sx, sy);
 		size(cmd[2], w, h);
+		int32_t stride, bw, bh;
+		const uint16_t *mem = _bank_memory(stride, bw, bh);
 		for (int32_t row = 0; row < h; row++) {
 			for (int32_t col = 0; col < w; col++) {
-				readback.push_back(vram[(size_t)((sy + row) % vram_height) * vram_width + (sx + col) % vram_width]);
+				readback.push_back(mem[(size_t)((sy + row) % bh) * stride + (sx + col) % bw]);
 			}
 		}
 	}
 }
 
 void GPU::_transfer_halfword(uint16_t p_value) {
-	uint16_t &dst = vram[(size_t)((transfer_y + transfer_row) % vram_height) * vram_width + (transfer_x + transfer_col) % vram_width];
+	// Into the selected texture bank (VRAM itself for bank 0).
+	int32_t stride, bw, bh;
+	uint16_t *mem = _bank_memory(stride, bw, bh);
+	uint16_t &dst = mem[(size_t)((transfer_y + transfer_row) % bh) * stride + (transfer_x + transfer_col) % bw];
 	if (!(state.check_mask && (dst & 0x8000))) {
 		dst = (uint16_t)(p_value | (state.set_mask ? 0x8000 : 0));
 	}

@@ -2,7 +2,7 @@
 // table, the way a PS1 game's object loop did. Per triangle: RTPT, near/far
 // rejection, NCLIP culling, AVSZ3 for the OT bucket, then per vertex
 // lighting (NCCS, or NCS with linear colour maths), emission and depth-cue
-// fog (DPCS), and one F3/G3 packet.
+// fog (DPCS), and one F3/G3 packet, or FT3/GT3 for textured meshes.
 //
 // The caller loads the GTE first: rotation (already multiplied by
 // 2^mesh.shift), translation, H, OFX/OFY and, for lit meshes, LLM/LCM/BK.
@@ -12,6 +12,7 @@
 #include "psx_convert.h"
 #include "psx_gte.h"
 #include "psx_ot.h"
+#include "psx_texture.h"
 
 #include <cstdint>
 
@@ -34,7 +35,8 @@ enum LightingMode : uint8_t {
 
 // An omni or spot light evaluated per vertex on the CPU (the GTE's three
 // light slots hold directional lights only). Positions and axes are in the
-// mesh's stored object space.
+// mesh's stored units, in the frame where vertex positions times
+// DrawParams::point_scale are in proportion (object space for uniform scale).
 struct PointLight {
 	float position[3] = { 0, 0, 0 }; // Stored mesh units
 	float metres_per_unit = 1.0f; // Size of one stored unit
@@ -47,6 +49,30 @@ struct PointLight {
 
 static constexpr int MAX_POINT_LIGHTS = 4;
 
+// Where a textured mesh's texture sits in VRAM (from VramAllocator), as the
+// polygon fields that address it.
+struct DrawTexture {
+	// GP0Encoder::texpage halfword: page, depth, and the mesh's blend mode and dither.
+	uint16_t texpage = 0;
+	uint16_t clut = 0; // GP0Encoder::clut halfword
+	uint16_t clut_semi = 0; // The same palette with STP on every colour
+	bool has_clut_semi = false;
+	// Every visible colour white: the additive fog pass keeps cut-out holes.
+	uint16_t clut_white = 0;
+	bool has_clut_white = false;
+	uint8_t u_offset = 0; // The texture's top-left corner inside its page
+	uint8_t v_offset = 0;
+	// Texture bank (GP0 E7h) the texture and its CLUTs are in; 0 = VRAM.
+	uint16_t bank = 0;
+	// GP0 E2h word that repeats this texture, for triangles flagged in tri_window.
+	uint32_t window_word = 0xE2000000u;
+	bool has_semi_texels = false; // Some texels have STP set
+};
+
+// The DrawTexture for a texture placed at VRAM (p_x, p_y) by VramAllocator,
+// with its CLUTs at p_clut_x/y, p_semi_x/y and p_white_x/y (x < 0: none).
+DrawTexture make_draw_texture(const TextureData &p_texture, int32_t p_x, int32_t p_y, int32_t p_clut_x, int32_t p_clut_y, int32_t p_semi_x, int32_t p_semi_y, int32_t p_white_x, int32_t p_white_y, uint8_t p_blend, bool p_dither, uint16_t p_bank = 0);
+
 struct DrawParams {
 	CullMode cull = CULL_BACK;
 	bool lit = true; // Lighting on; otherwise the baked colour as-is
@@ -55,13 +81,23 @@ struct DrawParams {
 	uint8_t emission[3] = { 0, 0, 0 };
 	const PointLight *point_lights = nullptr;
 	int point_light_count = 0;
-	// Depth cue toward GTE FC, per vertex, using DQA/DQB (DPCS).
+	// Vertex positions are scaled per axis by this before point lighting:
+	// a non-uniformly scaled instance's scale relative to its largest axis,
+	// with lights given in its rotation-only frame.
+	float point_scale[3] = { 1.0f, 1.0f, 1.0f };
+	// Depth cue toward GTE FC, per vertex, using DQA/DQB (DPCS). Textured
+	// triangles are darkened by the fog amount instead and get a second,
+	// additive pass of FC times the fog amount: texel * c * (1 - f) + FC * f.
 	bool fog = false;
 	// Transparent material. With BLEND_HALF the mesh's per-triangle alpha
 	// classes decide (opaque, 50% or hidden); other modes blend every triangle.
 	bool semi = false;
 	uint8_t blend = 0; // BlendMode for semi-transparent meshes
 	bool dither = true;
+	// Textured meshes (MeshData::textured) are drawn with this texture; null
+	// draws them untextured. The vertex colour then modulates the texel, with
+	// 128 = 1.0, so lights brighter than 1.0 can overbright up to 2x.
+	const DrawTexture *texture = nullptr;
 	// OTZ = AVSZ3 result >> ot_shift. Triangles nearer than OTZ 1 still land in bucket 0.
 	int32_t ot_shift = 4;
 	// Triangles whose every vertex is beyond this SZ are dropped (far plane).
@@ -84,6 +120,10 @@ struct DrawStats {
 	uint32_t culled_offscreen = 0;
 	uint32_t culled_alpha = 0; // Alpha below 0.25
 	uint32_t packets = 0;
+	uint32_t textured = 0; // Textured triangles drawn
+	uint32_t windowed = 0; // Of those, drawn with the texture window
+	uint32_t fog_passes = 0; // Additive fog polygons over textured ones
+	uint32_t banked = 0; // Textured triangles in texture banks above 0
 	uint32_t arena_full = 0;
 
 	void add(const DrawStats &p_other);

@@ -29,6 +29,7 @@ window frames, `-Stats`, `-Dev`, `-ModelsDir <folder>`, `-ModelsPerCategory 2`.
 | `fog_multimesh` | Depth fog, sky fog, a MultiMesh grid and a large subdivided ground |
 | `ortho` | An orthographic camera |
 | `skinned` | A two-bone mesh built in code, bent every frame (CPU skinning) |
+| `textured` | Procedural textures: repeating floor, a 256 x 256 wall split along tile edges, alpha scissor, alpha blend, a clamped decal, unshaded, fog and an omni light |
 | `ext_models` | Third-party models from `-ModelsDir` (see below) |
 
 `<scene>.override.cfg` next to a scene adds `[rendering]` settings for that
@@ -64,7 +65,9 @@ Frame N of the raw dumps and frame N of the movie are the same moment.
 `/W4 /WX`) and runs it: trig, the UNR divide, RTPS/RTPT/NCLIP/AVSZ and FLAG,
 GTE lighting (NCS/NCCS/NCDS/DPCS), mesh conversion, subdivision, alpha
 classes, `draw_mesh` (culling, near/far, lighting modes, emission, fog,
-point lights), coverage and fill rule, size limits and scaled VRAM, dither, blend modes,
+point lights), texture conversion (resampling, 4/8-bit palettes, alpha),
+the VRAM allocator, textured meshes (tile shift, texture window, texture
+banks, the fog pass), coverage and fill rule, size limits and scaled VRAM, dither, blend modes,
 modulation, transparency, CLUTs, texture window, mask bit, fills and copies,
 lines, the ordering table, frame layout and the demo. It also saves demo
 frames as PNG to `bin\psx_test_out\unit\demo\`, rendered without Godot or a
@@ -93,10 +96,32 @@ work in any project:
 | `rendering/psx/subdivide_size` | Split polygons until no edge is longer than this (metres, default 1, 0 = off) |
 | `rendering/psx/lighting_mode` | PS1 (display colour times light, as the GTE does) or Godot Match (linear, matches Godot's brightness) |
 | `rendering/psx/default_ambient` | Ambient light without a WorldEnvironment |
+| `rendering/psx/textures/max_size` | Largest texture side, 8 to 256 (the PS1's texture page limit); bigger textures are scaled down |
+| `rendering/psx/textures/depth` | Auto (4-bit when 15 colours or fewer, else 8-bit), or force 4-bit, 8-bit or 15-bit |
+| `rendering/psx/textures/max_colors` | Palette limit for 4/8-bit textures (0 = no limit beyond the depth's) |
+| `rendering/psx/textures/vram_banks` | Texture memory, in 1024 x 512 banks: 1 is the PS1, default Unlimited (see below) |
 | `rendering/psx/debug/demo_scene` | Draw the built-in test cube instead of the scene |
 | `rendering/psx/debug/dump_dir` | Folder to save raw PSX frames to |
 | `rendering/psx/debug/dump_frames` | How many frames to save, from frame 0 |
 | `rendering/psx/debug/print_stats` | One `PSX_STATS` and one `PSX_SCENE` line per frame: timings, instances, triangles in and culled by reason |
+
+## Texture memory
+
+Textures are converted when first drawn: scaled to a power of two, reduced to
+a 4- or 8-bit palette (CLUT) and packed into VRAM next to the framebuffers.
+Only the part of a texture a mesh's UVs use is kept, and identical textures
+are stored once. When VRAM is full, the least recently used texture not drawn
+this frame is removed; if nothing can be removed, the surface is drawn in the
+texture's average colour, with a warning.
+
+The PS1 has 1 MB of VRAM. With `vram_banks` above 1, extra 1024 x 512 texture
+banks are added as needed. Bank 0 is VRAM; GP0 command E7h (an extension; the
+PS1 does not have it) selects the bank that texture and CLUT reads and CPU
+uploads use. Drawing always goes to VRAM. A bank holds the same layout rules
+as VRAM, so a game that fits in 1 bank also fits on the hardware.
+
+`PSX_TEXTURES` lines (with `print_stats`) report textured and windowed
+triangles, textures resident, uploads, fallbacks, banks in use and free VRAM.
 
 ## Limits
 
@@ -118,4 +143,30 @@ work in any project:
   object; directional lights use the GTE's three slots. Spot cones are hard.
 - Transparency is 50%, opaque or hidden per triangle (the PS1 has one alpha).
 - Fog follows the GTE depth cue, a curve in 1/Z fitted to Godot's at two depths.
-- Particles, blend shapes and textures are not drawn yet.
+- Of the environment, only ambient light, the background colour and depth or
+  exponential fog are read. Sky textures, glow, tonemapping, SSAO, volumetric
+  fog and global illumination (SDFGI, VoxelGI, lightmaps) are ignored.
+- Decals, particles and blend shapes are not drawn.
+- A triangle that crosses the near plane is dropped whole, not clipped.
+  Subdivision hides this most of the time; large polygons very close to the
+  camera can still pop out.
+- There is no depth buffer: polygons are sorted by average depth in the
+  ordering table, as on the PS1, so overlapping or crossing polygons can sort
+  wrongly. This is intended.
+- Skinned meshes are skinned and converted again every frame on the CPU,
+  which gets slow with many characters.
+- Textures have no mipmaps or filtering (nearest texel, affine mapping, as
+  on the PS1), so fine detail shimmers at a distance.
+- Textures larger than `textures/max_size` (256 at most) are scaled down.
+- Fog on textured surfaces is drawn as a second, additive pass: the texel
+  fades to black and the fog colour is added on top.
+- Emission is multiplied by the texel colour.
+- A texture is converted once per RID; changes to its image afterwards are
+  not seen.
+- Point lights on non-uniformly scaled meshes are approximate.
+- Only VisualInstance3D layers 1-20 go through the PSX core. In the editor,
+  the helpers on layers 21-32 (grid, origin axes, gizmos, selection boxes)
+  are drawn by Godot's renderer over the PSX frame. There is no depth buffer
+  under them, so they show through models, as if every gizmo were "on top".
+- Subdivision stops once a surface reaches about 16,000 triangles, so a very
+  large polygon keeps long edges.

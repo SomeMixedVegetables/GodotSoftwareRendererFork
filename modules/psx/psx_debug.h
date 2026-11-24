@@ -39,6 +39,17 @@ struct PSXDebug {
 		// Meshes are subdivided until no edge is longer than this (metres; 0 =
 		// off), so big polygons sort, near-clip and light like small ones.
 		GLOBAL_DEF_RST(PropertyInfo(Variant::FLOAT, "rendering/psx/subdivide_size", PROPERTY_HINT_RANGE, "0,16,0.05,or_greater"), 1.0);
+		// Textures, converted once when first drawn (design doc, section 11).
+		// max_size: largest side in texels (bigger ones are scaled down).
+		// depth: Auto picks 4-bit when 16 colours are enough, else 8-bit with
+		// a median-cut palette. max_colors: palette size limit, 0 = 16 or 256.
+		GLOBAL_DEF_RST(PropertyInfo(Variant::INT, "rendering/psx/textures/max_size", PROPERTY_HINT_ENUM, "8:8,16:16,32:32,64:64,128:128,256:256"), 256);
+		GLOBAL_DEF_RST(PropertyInfo(Variant::INT, "rendering/psx/textures/depth", PROPERTY_HINT_ENUM, "Auto,4-bit,8-bit,15-bit"), 0);
+		GLOBAL_DEF_RST(PropertyInfo(Variant::INT, "rendering/psx/textures/max_colors", PROPERTY_HINT_RANGE, "0,256,1"), 0);
+		// Texture memory in 1024 x 512 banks. 1 is the PS1: textures share
+		// VRAM's texture region and the least recently used are evicted when
+		// it is full. More banks (a GP0 extension) hold textures beyond it.
+		GLOBAL_DEF_RST(PropertyInfo(Variant::INT, "rendering/psx/textures/vram_banks", PROPERTY_HINT_ENUM, "1 (PS1):1,2:2,4:4,8:8,16:16,Unlimited:0"), 0);
 		// Ambient light when the scene has no WorldEnvironment.
 		GLOBAL_DEF_RST("rendering/psx/default_ambient", Color(0.2, 0.2, 0.2));
 		// Draw the built-in test cube instead of the scene.
@@ -79,6 +90,13 @@ struct PSXDebug {
 		if (print_stats) {
 			print_line(vformat("PSX_SCENE frame=%d instances=%d surfaces=%d conversions=%d tris_in=%d near=%d backface=%d offscreen=%d far=%d",
 					(int64_t)p_frame, p_instances, p_surfaces, p_conversions, p_triangles, p_near, p_backface, p_offscreen, p_far));
+		}
+	}
+
+	void report_textures(uint64_t p_frame, uint32_t p_textured, uint32_t p_windowed, uint32_t p_resident, uint32_t p_uploads, uint32_t p_fallbacks, uint32_t p_banks, uint32_t p_vram_free_percent) const {
+		if (print_stats) {
+			print_line(vformat("PSX_TEXTURES frame=%d textured_tris=%d windowed_tris=%d resident=%d uploads=%d fallbacks=%d banks=%d vram_free=%d%%",
+					(int64_t)p_frame, p_textured, p_windowed, p_resident, p_uploads, p_fallbacks, p_banks, p_vram_free_percent));
 		}
 	}
 

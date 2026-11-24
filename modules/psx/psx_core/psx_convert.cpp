@@ -1,6 +1,9 @@
 #include "psx_convert.h"
 
+#include <algorithm>
 #include <cmath>
+#include <map>
+#include <tuple>
 #include <unordered_map>
 #include <utility>
 
@@ -191,16 +194,202 @@ static bool subdivide(const MeshInput &p_input, const ConvertOptions &p_options,
 	return true;
 }
 
+static void finish_geometry(Subdivided &r_geo) {
+	r_geo.input = MeshInput();
+	r_geo.input.positions = r_geo.positions.data();
+	r_geo.input.normals = r_geo.normals.empty() ? nullptr : r_geo.normals.data();
+	r_geo.input.colors = r_geo.colors.empty() ? nullptr : r_geo.colors.data();
+	r_geo.input.uvs = r_geo.uvs.empty() ? nullptr : r_geo.uvs.data();
+	r_geo.input.vertex_count = (int32_t)(r_geo.positions.size() / 3);
+	r_geo.input.indices = r_geo.indices.data();
+	r_geo.input.index_count = (int32_t)r_geo.indices.size();
+}
+
+static int64_t floor_div64(int64_t p_a, int64_t p_b) {
+	return p_a >= 0 ? p_a / p_b : -((-p_a + p_b - 1) / p_b);
+}
+
+// Texel coordinate of a UV along one axis, as convert_direct rounds it.
+static int64_t texel_coord(float p_uv, int32_t p_size) {
+	const double t = (double)p_uv * p_size;
+	return (int64_t)std::llround(t < -1e9 ? -1e9 : (t > 1e9 ? 1e9 : t));
+}
+
+// Whether three texel coordinates of a repeating texture fit one triangle's
+// 8-bit UVs: inside one tile, or (sizes below 256) within 255 texels using
+// the texture window.
+static bool uv_span_fits(const int64_t p_coord[3], int32_t p_size) {
+	const int64_t lo = std::min(p_coord[0], std::min(p_coord[1], p_coord[2]));
+	const int64_t hi = std::max(p_coord[0], std::max(p_coord[1], p_coord[2]));
+	const int64_t span = hi - floor_div64(lo, p_size) * p_size;
+	return span <= p_size || (p_size < 256 && span <= 255);
+}
+
+// Copies the input, applies the UV transform and, for repeating textures,
+// splits triangles whose UVs span more than 8-bit texture coordinates can
+// reach along the tile edges (u or v = a multiple of the texture size). New
+// vertices are shared per (edge, line), so neighbours stay crack-free.
+static void prepare_uvs(const MeshInput &p_input, const ConvertOptions &p_options, Subdivided &r_geo) {
+	const int32_t n = p_input.vertex_count;
+	r_geo.positions.assign(p_input.positions, p_input.positions + n * 3);
+	if (p_input.normals) {
+		r_geo.normals.assign(p_input.normals, p_input.normals + n * 3);
+	}
+	if (p_input.colors) {
+		r_geo.colors.assign(p_input.colors, p_input.colors + n * 4);
+	}
+	r_geo.uvs.resize((size_t)n * 2);
+	for (int32_t i = 0; i < n; i++) {
+		r_geo.uvs[i * 2] = p_input.uvs[i * 2] * p_options.uv_scale[0] + p_options.uv_offset[0];
+		r_geo.uvs[i * 2 + 1] = p_input.uvs[i * 2 + 1] * p_options.uv_scale[1] + p_options.uv_offset[1];
+	}
+	std::vector<int32_t> tris;
+	if (p_input.indices) {
+		for (int32_t i = 0; i + 2 < p_input.index_count; i += 3) {
+			const int32_t a = p_input.indices[i], b = p_input.indices[i + 1], c = p_input.indices[i + 2];
+			if (a >= 0 && b >= 0 && c >= 0 && a < n && b < n && c < n) {
+				tris.push_back(a);
+				tris.push_back(b);
+				tris.push_back(c);
+			}
+		}
+	} else {
+		for (int32_t i = 0; i + 2 < n; i += 3) {
+			tris.push_back(i);
+			tris.push_back(i + 1);
+			tris.push_back(i + 2);
+		}
+	}
+	if (!p_options.texture_repeat) {
+		r_geo.indices.swap(tris);
+		finish_geometry(r_geo);
+		return;
+	}
+
+	const int32_t sizes[2] = { p_options.texture_width, p_options.texture_height };
+	std::map<std::tuple<int32_t, int32_t, int, int64_t>, int32_t> cuts;
+	auto lerp_into = [](std::vector<float> &r_v, int p_width, int32_t a, int32_t b, float t) {
+		if (r_v.empty()) {
+			return;
+		}
+		for (int k = 0; k < p_width; k++) {
+			const float va = r_v[a * p_width + k], vb = r_v[b * p_width + k];
+			r_v.push_back(va + (vb - va) * t);
+		}
+	};
+	// Vertex where edge (a, b) crosses texel line p_line on p_axis.
+	auto cut = [&](int32_t a, int32_t b, int p_axis, int64_t p_line) -> int32_t {
+		if (a > b) {
+			std::swap(a, b);
+		}
+		const auto key = std::make_tuple(a, b, p_axis, p_line);
+		auto it = cuts.find(key);
+		if (it != cuts.end()) {
+			return it->second;
+		}
+		const double ca = (double)r_geo.uvs[a * 2 + p_axis] * sizes[p_axis];
+		const double cb = (double)r_geo.uvs[b * 2 + p_axis] * sizes[p_axis];
+		const float t = (float)((p_line - ca) / (cb - ca));
+		const int32_t m = (int32_t)(r_geo.positions.size() / 3);
+		lerp_into(r_geo.positions, 3, a, b, t);
+		lerp_into(r_geo.normals, 3, a, b, t);
+		lerp_into(r_geo.colors, 4, a, b, t);
+		lerp_into(r_geo.uvs, 2, a, b, t);
+		cuts.emplace(key, m);
+		return m;
+	};
+	auto coord = [&](int32_t v, int p_axis) {
+		return (double)r_geo.uvs[v * 2 + p_axis] * sizes[p_axis];
+	};
+	// Keeps the part of p_poly with coord >= p_line (p_keep_above) or <= p_line.
+	auto clip = [&](const std::vector<int32_t> &p_poly, int p_axis, int64_t p_line, bool p_keep_above) {
+		std::vector<int32_t> out;
+		for (size_t i = 0; i < p_poly.size(); i++) {
+			const int32_t cur = p_poly[i], next = p_poly[(i + 1) % p_poly.size()];
+			const double cc = coord(cur, p_axis), cn = coord(next, p_axis);
+			const bool in_cur = p_keep_above ? cc >= p_line : cc <= p_line;
+			const bool in_next = p_keep_above ? cn >= p_line : cn <= p_line;
+			if (in_cur) {
+				out.push_back(cur);
+			}
+			if (in_cur != in_next) {
+				out.push_back(cut(cur, next, p_axis, p_line));
+			}
+		}
+		return out;
+	};
+
+	std::vector<int32_t> out_tris;
+	out_tris.reserve(tris.size());
+	std::vector<std::vector<int32_t>> pieces, next_pieces;
+	for (size_t t = 0; t + 2 < tris.size(); t += 3) {
+		pieces.assign(1, { tris[t], tris[t + 1], tris[t + 2] });
+		for (int axis = 0; axis < 2; axis++) {
+			next_pieces.clear();
+			for (const std::vector<int32_t> &poly : pieces) {
+				const int32_t size = sizes[axis];
+				double lo = 1e30, hi = -1e30;
+				for (int32_t v : poly) {
+					lo = std::fmin(lo, coord(v, axis));
+					hi = std::fmax(hi, coord(v, axis));
+				}
+				bool fits = poly.size() == 3;
+				if (fits) {
+					const int64_t c3[3] = { texel_coord(r_geo.uvs[poly[0] * 2 + axis], size), texel_coord(r_geo.uvs[poly[1] * 2 + axis], size), texel_coord(r_geo.uvs[poly[2] * 2 + axis], size) };
+					fits = uv_span_fits(c3, size);
+				} else {
+					fits = hi - std::floor(lo / size) * size <= size;
+				}
+				const int64_t k0 = (int64_t)std::floor(lo / size), k1 = (int64_t)std::ceil(hi / size);
+				if (fits || k1 - k0 > 64) {
+					next_pieces.push_back(poly); // Fits, or too many tiles: clamped later.
+					continue;
+				}
+				for (int64_t k = k0; k < k1; k++) {
+					std::vector<int32_t> strip = clip(poly, axis, k * size, true);
+					if (strip.size() >= 3) {
+						strip = clip(strip, axis, (k + 1) * size, false);
+					}
+					if (strip.size() >= 3) {
+						next_pieces.push_back(strip);
+					}
+				}
+			}
+			pieces.swap(next_pieces);
+		}
+		for (const std::vector<int32_t> &poly : pieces) {
+			for (size_t k = 1; k + 1 < poly.size(); k++) {
+				out_tris.push_back(poly[0]);
+				out_tris.push_back(poly[k]);
+				out_tris.push_back(poly[k + 1]);
+			}
+		}
+	}
+	r_geo.indices.swap(out_tris);
+	finish_geometry(r_geo);
+}
+
 static bool convert_direct(const MeshInput &p_input, const ConvertOptions &p_options, MeshData &r_mesh);
 
 bool convert_mesh(const MeshInput &p_input, const ConvertOptions &p_options, MeshData &r_mesh) {
-	if (p_options.max_edge > 0.0f && p_options.scale > 0.0f && p_input.positions && p_input.vertex_count > 0) {
+	if (!p_input.positions || p_input.vertex_count <= 0) {
+		r_mesh = MeshData();
+		return false;
+	}
+	const bool textured = p_options.texture_width > 0 && p_options.texture_height > 0 && p_input.uvs;
+	Subdivided prepared;
+	const MeshInput *src = &p_input;
+	if (textured) {
+		prepare_uvs(p_input, p_options, prepared);
+		src = &prepared.input;
+	}
+	if (p_options.max_edge > 0.0f && p_options.scale > 0.0f) {
 		Subdivided sub;
-		if (subdivide(p_input, p_options, sub)) {
+		if (subdivide(*src, p_options, sub)) {
 			return convert_direct(sub.input, p_options, r_mesh);
 		}
 	}
-	return convert_direct(p_input, p_options, r_mesh);
+	return convert_direct(*src, p_options, r_mesh);
 }
 
 static bool convert_direct(const MeshInput &p_input, const ConvertOptions &p_options, MeshData &r_mesh) {
@@ -271,7 +460,9 @@ static bool convert_direct(const MeshInput &p_input, const ConvertOptions &p_opt
 	if (p_input.normals) {
 		r_mesh.normals.resize(n);
 		for (int32_t i = 0; i < n; i++) {
-			const double x = p_input.normals[i * 3], y = p_input.normals[i * 3 + 1], z = p_input.normals[i * 3 + 2];
+			const double x = p_input.normals[i * 3] * (double)p_options.normal_scale[0];
+			const double y = p_input.normals[i * 3 + 1] * (double)p_options.normal_scale[1];
+			const double z = p_input.normals[i * 3 + 2] * (double)p_options.normal_scale[2];
 			const double len = std::sqrt(x * x + y * y + z * z);
 			const double s = len > 1e-12 ? 4096.0 / len : 0.0;
 			bool unused = false;
@@ -332,12 +523,49 @@ static bool convert_direct(const MeshInput &p_input, const ConvertOptions &p_opt
 		}
 	}
 
-	// UVs: wrapped to 0..255 texels of a 256-texel page (refined with textures).
-	if (p_input.uvs) {
-		r_mesh.uvs.resize((size_t)n * 2);
-		for (int32_t i = 0; i < n * 2; i++) {
-			const float u = p_input.uvs[i] - std::floor(p_input.uvs[i]);
-			r_mesh.uvs[i] = (uint8_t)((int)(u * 256.0f) & 255);
+	// UVs (already transformed by prepare_uvs): texel coordinates per
+	// triangle corner. Repeating textures: each triangle is moved by whole
+	// tiles to the tile it starts in; one that still runs past the edge uses
+	// the texture window. A texel coordinate equal to the size (the far
+	// edge) is pulled in to size - 1, as PS1 tools did.
+	if (p_input.uvs && p_options.texture_width > 0 && p_options.texture_height > 0) {
+		r_mesh.textured = true;
+		const uint32_t tris = r_mesh.triangle_count();
+		const int32_t sizes[2] = { p_options.texture_width, p_options.texture_height };
+		r_mesh.tri_uvs.resize((size_t)tris * 6);
+		std::vector<uint8_t> window(tris, 0);
+		bool any_window = false;
+		for (uint32_t t = 0; t < tris; t++) {
+			int64_t c[2][3];
+			bool windowed = false;
+			for (int axis = 0; axis < 2; axis++) {
+				const int32_t size = sizes[axis];
+				for (int corner = 0; corner < 3; corner++) {
+					c[axis][corner] = texel_coord(p_input.uvs[r_mesh.indices[t * 3 + corner] * 2 + axis], size);
+				}
+				if (p_options.texture_repeat) {
+					const int64_t first = std::min(c[axis][0], std::min(c[axis][1], c[axis][2]));
+					const int64_t tile = floor_div64(first, size) * size;
+					int64_t last = 0;
+					for (int corner = 0; corner < 3; corner++) {
+						c[axis][corner] -= tile;
+						last = std::max(last, c[axis][corner]);
+					}
+					windowed = windowed || (last > size && size < 256 && last <= 255);
+				}
+			}
+			for (int axis = 0; axis < 2; axis++) {
+				const int64_t top = windowed ? 255 : sizes[axis] - 1;
+				for (int corner = 0; corner < 3; corner++) {
+					const int64_t v = c[axis][corner];
+					r_mesh.tri_uvs[t * 6 + corner * 2 + axis] = (uint8_t)(v < 0 ? 0 : (v > top ? top : v));
+				}
+			}
+			window[t] = windowed ? 1 : 0;
+			any_window = any_window || windowed;
+		}
+		if (any_window) {
+			r_mesh.tri_window = std::move(window);
 		}
 	}
 	return true;

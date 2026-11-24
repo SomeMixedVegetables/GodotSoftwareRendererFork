@@ -14,6 +14,7 @@
 #include "../../psx_core/psx_gte.h"
 #include "../../psx_core/psx_ot.h"
 #include "../../psx_core/psx_render.h"
+#include "../../psx_core/psx_texture.h"
 #include "../../psx_core/psx_trig.h"
 
 #include <cmath>
@@ -634,6 +635,318 @@ static void test_subdivide_and_point_lights() {
 
 // --- GPU: coverage ---
 
+static std::vector<uint8_t> rgba_image(int w, int h, uint32_t (*p_fn)(int, int)) {
+	std::vector<uint8_t> img((size_t)w * h * 4);
+	for (int y = 0; y < h; y++) {
+		for (int x = 0; x < w; x++) {
+			const uint32_t c = p_fn(x, y); // 0xAABBGGRR
+			for (int k = 0; k < 4; k++) {
+				img[((size_t)y * w + x) * 4 + k] = (uint8_t)(c >> (k * 8));
+			}
+		}
+	}
+	return img;
+}
+
+static uint16_t texel_index(const TextureData &t, int x, int y) {
+	const int per = t.depth == TEXTURE_4BIT ? 4 : (t.depth == TEXTURE_8BIT ? 2 : 1);
+	const int bits = 16 / per;
+	const uint16_t hw = t.texels[(size_t)y * t.hw_width() + x / per];
+	return per == 1 ? hw : (uint16_t)((hw >> ((x % per) * bits)) & ((1 << bits) - 1));
+}
+
+static void test_convert_texture() {
+	// Four colours plus cut-out texels: 4-bit, index 0 transparent.
+	const std::vector<uint8_t> quad = rgba_image(16, 16, [](int x, int y) -> uint32_t {
+		if (x == 0 && y == 0) {
+			return 0x00FFFFFFu; // Alpha 0
+		}
+		const uint32_t colors[4] = { 0xFF000000u, 0xFF0000FFu, 0xFF00FF00u, 0xFFFFFFFFu };
+		return colors[(x / 4 + y / 4) & 3];
+	});
+	TextureOptions opt;
+	opt.alpha_mode = ALPHA_CUT;
+	TextureData t;
+	CHECK(convert_texture(quad.data(), 16, 16, opt, t));
+	CHECK_EQ(t.width, 16);
+	CHECK_EQ(t.depth, TEXTURE_4BIT);
+	CHECK(t.has_transparent);
+	CHECK(!t.has_semi);
+	CHECK_EQ(t.colors, 5);
+	CHECK_EQ(texel_index(t, 0, 0), 0);
+	CHECK_EQ(t.clut[0], 0);
+	CHECK_EQ(t.clut[texel_index(t, 1, 0)], 0x8000); // Opaque black
+	CHECK_EQ(t.clut[texel_index(t, 4, 0)], 0x001F); // Red
+	CHECK_EQ(t.clut[texel_index(t, 12, 0)], 0x7FFF); // White
+	CHECK_EQ(t.clut_semi[texel_index(t, 12, 0)], 0xFFFF);
+	CHECK_EQ(t.clut_semi[0], 0); // Transparent stays transparent
+
+	// Opaque materials ignore alpha.
+	opt.alpha_mode = ALPHA_IGNORE;
+	CHECK(convert_texture(quad.data(), 16, 16, opt, t));
+	CHECK(!t.has_transparent);
+	CHECK_EQ(t.colors, 4);
+
+	// A gradient with 1024 colours: 8-bit, quantised; or 4-bit with a
+	// 16-colour limit. Sizes become powers of two, at most max_size.
+	const std::vector<uint8_t> grad = rgba_image(48, 20, [](int x, int y) -> uint32_t {
+		return 0xFF000000u | (uint32_t)(x * 5) | ((uint32_t)(y * 12) << 8) | ((uint32_t)((x * y) & 255) << 16);
+	});
+	CHECK(convert_texture(grad.data(), 48, 20, opt, t));
+	CHECK_EQ(t.width, 64);
+	CHECK_EQ(t.height, 32);
+	CHECK_EQ(t.depth, TEXTURE_8BIT);
+	CHECK(t.colors > 200 && t.colors <= 256);
+	CHECK_EQ((int)t.texels.size(), 32 * 32);
+	opt.max_colors = 16;
+	CHECK(convert_texture(grad.data(), 48, 20, opt, t));
+	CHECK_EQ(t.depth, TEXTURE_4BIT);
+	CHECK(t.colors <= 16);
+	opt.max_colors = 0;
+	opt.max_size = 32;
+	CHECK(convert_texture(grad.data(), 48, 20, opt, t));
+	CHECK_EQ(t.width, 32);
+	CHECK_EQ(t.height, 32);
+	opt.max_size = 256;
+
+	// Blended: half alpha sets STP; opaque black then avoids 8000h.
+	const std::vector<uint8_t> glass = rgba_image(8, 8, [](int x, int) -> uint32_t {
+		return x < 4 ? 0x80FF0000u : 0xFF000000u;
+	});
+	opt.alpha_mode = ALPHA_BLEND;
+	CHECK(convert_texture(glass.data(), 8, 8, opt, t));
+	CHECK(t.has_semi);
+	CHECK_EQ(t.clut[texel_index(t, 0, 0)], 0xFC00); // Blue, STP
+	CHECK_EQ(t.clut[texel_index(t, 7, 0)], 0x0421);
+
+	// Direct 15-bit.
+	opt.depth = DEPTH_FORCE_15BIT;
+	opt.alpha_mode = ALPHA_IGNORE;
+	CHECK(convert_texture(quad.data(), 16, 16, opt, t));
+	CHECK_EQ(t.depth, TEXTURE_15BIT);
+	CHECK(t.clut.empty());
+	CHECK_EQ(texel_index(t, 4, 0), 0x001F);
+	CHECK_EQ(texel_index(t, 1, 0), 0x8000);
+
+	CHECK(!convert_texture(nullptr, 0, 0, opt, t));
+}
+
+static void test_vram_allocator() {
+	VramAllocator a;
+	a.reserve(0, 0, 320, 480); // Display buffers
+	struct Box {
+		int32_t x, y, w, h;
+	};
+	std::vector<Box> boxes;
+	const int32_t sizes[][2] = { { 128, 256 }, { 64, 64 }, { 4, 16 }, { 2, 8 }, { 16, 32 }, { 128, 256 } };
+	bool aligned = true, outside = true;
+	for (const auto &s : sizes) {
+		Box b = { 0, 0, s[0], s[1] };
+		CHECK(a.alloc(s[0], s[1], b.x, b.y));
+		aligned = aligned && b.x % s[0] == 0 && b.y % s[1] == 0;
+		outside = outside && (b.x >= 320 || b.y >= 480);
+		boxes.push_back(b);
+	}
+	CHECK(aligned);
+	CHECK(outside);
+	bool overlap = false;
+	for (size_t i = 0; i < boxes.size(); i++) {
+		for (size_t k = i + 1; k < boxes.size(); k++) {
+			const Box &p = boxes[i], &q = boxes[k];
+			overlap = overlap || (p.x < q.x + q.w && q.x < p.x + p.w && p.y < q.y + q.h && q.y < p.y + p.h);
+		}
+	}
+	CHECK(!overlap);
+	// Fill up with 8-bit 256 x 256 boxes, then free one and reuse it.
+	int32_t x = 0, y = 0, last_x = -1, last_y = -1, count = 0;
+	while (a.alloc(128, 256, x, y)) {
+		last_x = x;
+		last_y = y;
+		count++;
+	}
+	CHECK(count >= 1);
+	a.free(last_x, last_y, 128, 256);
+	CHECK(a.alloc(128, 256, x, y));
+	CHECK_EQ(x, last_x);
+	CHECK_EQ(y, last_y);
+	CHECK(!a.alloc(512, 8, x, y)); // Wider than a texture can be
+
+	// CLUTs: X in 16-halfword steps; a block is freed when empty.
+	VramAllocator c;
+	const uint32_t before = c.free_cells();
+	int32_t cx[3], cy[3];
+	CHECK(c.alloc_clut(16, cx[0], cy[0]));
+	CHECK(c.alloc_clut(256, cx[1], cy[1]));
+	CHECK(c.alloc_clut(16, cx[2], cy[2]));
+	CHECK(cx[0] % 16 == 0 && cx[1] % 16 == 0 && cx[2] % 16 == 0);
+	CHECK(!(cx[0] == cx[2] && cy[0] == cy[2]));
+	CHECK(cy[1] != cy[0]); // A 256-entry CLUT takes a whole row of its block.
+	for (int i = 0; i < 3; i++) {
+		c.free_clut(cx[i], cy[i], i == 1 ? 256 : 16);
+	}
+	CHECK_EQ(c.free_cells(), before);
+}
+
+static void test_textured_mesh() {
+	// A quad with UVs 0..1, then 0..3 (repeat), on a 32 x 32 texture.
+	const float pos[] = { -400, -400, 0, 400, -400, 0, -400, 400, 0, 400, 400, 0 };
+	const float nrm[] = { 0, 0, -1, 0, 0, -1, 0, 0, -1, 0, 0, -1 };
+	const float uv1[] = { 0, 0, 1, 0, 0, 1, 1, 1 };
+	const float uv3[] = { 0, 0, 3, 0, 0, 3, 3, 3 };
+	const int32_t idx[] = { 0, 1, 2, 1, 3, 2 };
+	MeshInput in;
+	in.positions = pos;
+	in.normals = nrm;
+	in.uvs = uv1;
+	in.vertex_count = 4;
+	in.indices = idx;
+	in.index_count = 6;
+	ConvertOptions opt;
+	opt.scale = 1.0f;
+	opt.texture_width = 32;
+	opt.texture_height = 32;
+	MeshData m;
+	CHECK(convert_mesh(in, opt, m));
+	CHECK(m.textured);
+	CHECK_EQ(m.triangle_count(), 2);
+	CHECK(m.tri_window.empty());
+	CHECK_EQ(m.tri_uvs[2], 31); // Corner 1 of triangle 0: u = 1.0 -> 31
+	CHECK_EQ(m.tri_uvs[5], 31); // Corner 2: v = 1.0 -> 31
+
+	in.uvs = uv3;
+	MeshData rep;
+	CHECK(convert_mesh(in, opt, rep));
+	CHECK_EQ(rep.triangle_count(), 2);
+	CHECK_EQ(rep.tri_window.size(), 2);
+	CHECK_EQ(rep.tri_uvs[2], 96); // 3 tiles of 32, through the window
+
+	// Not repeating: clamped.
+	opt.texture_repeat = false;
+	MeshData clamp;
+	CHECK(convert_mesh(in, opt, clamp));
+	CHECK(clamp.tri_window.empty());
+	CHECK_EQ(clamp.tri_uvs[2], 31);
+	opt.texture_repeat = true;
+
+	// A 256 texture repeated twice cannot use 8-bit UVs: split at the tile
+	// edge, every piece inside one tile, nothing windowed.
+	const float uv2[] = { 0, 0, 2, 0, 0, 2, 2, 2 };
+	in.uvs = uv2;
+	opt.texture_width = 256;
+	opt.texture_height = 256;
+	MeshData split;
+	CHECK(convert_mesh(in, opt, split));
+	CHECK(split.triangle_count() > 4);
+	CHECK(split.tri_window.empty());
+	// UV offsets (uv1_offset) move whole tiles: same UVs as without.
+	opt.uv_offset[0] = 5.0f;
+	MeshData moved;
+	CHECK(convert_mesh(in, opt, moved));
+	CHECK(moved.tri_uvs == split.tri_uvs);
+	opt.uv_offset[0] = 0.0f;
+
+	// Draw: an 8 x 8 checker of white and red, 4-bit, at (640, 0), lit at
+	// 0.5 (PS1 mode): white 128 * 0.5 = 64 modulation -> 31 * 64 / 128 = 15.
+	const std::vector<uint8_t> checker = rgba_image(8, 8, [](int x, int y) -> uint32_t {
+		return ((x + y) & 1) ? 0xFF0000FFu : 0xFFFFFFFFu;
+	});
+	TextureOptions topt;
+	TextureData tex;
+	CHECK(convert_texture(checker.data(), 8, 8, topt, tex));
+	in.uvs = uv1;
+	opt.texture_width = tex.width;
+	opt.texture_height = tex.height;
+	opt.max_edge = 0.0f;
+	MeshData quad;
+	CHECK(convert_mesh(in, opt, quad));
+
+	GPU g;
+	VramAllocator alloc;
+	alloc.reserve(0, 0, 320, 240);
+	int32_t tx, ty, clx, cly;
+	CHECK(alloc.alloc(tex.hw_width(), tex.height, tx, ty));
+	CHECK(alloc.alloc_clut(16, clx, cly));
+	upload_rect(g, tx, ty, tex.hw_width(), tex.height, tex.texels.data());
+	upload_rect(g, clx, cly, 16, 1, tex.clut.data());
+	const DrawTexture dt = make_draw_texture(tex, tx, ty, clx, cly, -1, 0, -1, 0, BLEND_HALF, false);
+
+	auto draw = [&](const MeshData &p_mesh, DrawStats &r_stats, const DrawTexture *p_tex = nullptr, bool p_fog = false) {
+		PacketArena arena(1u << 12);
+		PacketBuilder pb(arena, g.get_encoder());
+		OrderingTable ot(arena, 256);
+		ot.clear();
+		GTE gte = basic_gte();
+		gte.translation = { 0, 0, 1000 };
+		gte.ambient = { 2048, 2048, 2048 };
+		DrawParams p;
+		p.dither = false;
+		p.texture = p_tex ? p_tex : &dt;
+		if (p_fog) {
+			// Full fog everywhere (IR0 = DQB = 1.0), toward (0, 128, 255).
+			p.fog = true;
+			gte.dqa = 0;
+			gte.dqb = 0x1000000;
+			gte.far_color = { 0, 128 * 16, 255 * 16 };
+		}
+		ot.add(255, pb.fill(0, 0, 320, 240, 0, 0, 0));
+		ot.add(255, pb.environment(0, 0, 319, 239, 0, 0, GP0Encoder::texpage(0, 0, 0, 0, false)));
+		draw_mesh(gte, pb, ot, p_mesh, p, r_stats);
+		ot.draw(g);
+	};
+	DrawStats s;
+	draw(quad, s);
+	CHECK_EQ(s.textured, 2);
+	CHECK_EQ(s.windowed, 0);
+	// 8 texels over ~205 pixels: about 25 pixels per texel.
+	const uint16_t a = g.vram_get(60, 20), b = g.vram_get(60 + 26, 20);
+	CHECK(a == 15 || a == (15 | 15 << 5 | 15 << 10));
+	CHECK(b == 15 || b == (15 | 15 << 5 | 15 << 10));
+	CHECK(a != b);
+
+	// Repeated 3 times: the window keeps sampling inside the texture, so
+	// every pixel is still white or red at half light.
+	in.uvs = uv3;
+	MeshData quad3;
+	CHECK(convert_mesh(in, opt, quad3));
+	CHECK(!quad3.tri_window.empty());
+	DrawStats s3;
+	draw(quad3, s3);
+	CHECK_EQ(s3.windowed, 2);
+	bool only_texture = true;
+	int changes = 0;
+	for (int x = 70; x < 250; x++) {
+		const uint16_t v = g.vram_get(x, 120);
+		only_texture = only_texture && (v == 15 || v == (15 | 15 << 5 | 15 << 10));
+		changes += x > 70 && v != g.vram_get(x - 1, 120);
+	}
+	CHECK(only_texture);
+	CHECK(changes >= 18); // 24 texel edges across the quad, a few off-screen
+	CHECK_EQ(g.get_state().window_and_x, 0xFF); // Window reset after each triangle
+
+	// Texture bank 2 (an extension): the same texture drawn from there.
+	CHECK_EQ(g.get_texture_bank_count(), 1);
+	upload_rect(g, 0, 0, tex.hw_width(), tex.height, tex.texels.data(), 2);
+	upload_rect(g, 0, 8, 16, 1, tex.clut.data(), 2);
+	CHECK_EQ(g.get_texture_bank_count(), 3);
+	CHECK_EQ(g.bank_get(2, 1, 8), tex.clut[1]);
+	CHECK_EQ(g.get_state().texture_bank, 0);
+	const DrawTexture banked = make_draw_texture(tex, 0, 0, 0, 8, -1, 0, -1, 0, BLEND_HALF, false, 2);
+	DrawStats sb;
+	draw(quad, sb, &banked);
+	CHECK_EQ(sb.banked, 2);
+	CHECK_EQ(g.vram_get(60, 20), a);
+	CHECK_EQ(g.vram_get(60 + 26, 20), b);
+	CHECK_EQ(g.get_state().texture_bank, 0); // Back to VRAM after each triangle
+
+	// Textured fog: the texel fades to black and the fog colour is added,
+	// so full fog is the fog colour: (0, 128, 255) -> (0, 16, 31).
+	DrawStats sf;
+	draw(quad, sf, nullptr, true);
+	CHECK_EQ(sf.fog_passes, 2);
+	CHECK_EQ(g.vram_get(60, 20), (uint16_t)(16 << 5 | 31 << 10));
+	CHECK_EQ(g.vram_get(60 + 26, 20), (uint16_t)(16 << 5 | 31 << 10));
+}
+
 static void test_half_open_coverage() {
 	GPU g;
 	flat_tri(g, 0, 0, 10, 0, 0, 10, col(255, 255, 255));
@@ -1215,6 +1528,9 @@ int main(int argc, char **argv) {
 		{ "draw_mesh", test_draw_mesh },
 		{ "draw_mesh_features", test_draw_mesh_features },
 		{ "subdivide_and_point_lights", test_subdivide_and_point_lights },
+		{ "convert_texture", test_convert_texture },
+		{ "vram_allocator", test_vram_allocator },
+		{ "textured_mesh", test_textured_mesh },
 		{ "half_open_coverage", test_half_open_coverage },
 		{ "fill_rule_fan", test_fill_rule_fan },
 		{ "size_limits_and_scale", test_size_limits },

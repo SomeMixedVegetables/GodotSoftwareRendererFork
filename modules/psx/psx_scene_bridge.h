@@ -26,7 +26,9 @@
 #include "psx_core/psx_gte.h"
 #include "psx_core/psx_ot.h"
 #include "psx_core/psx_render.h"
+#include "psx_core/psx_texture.h"
 
+#include "core/io/image.h"
 #include "core/math/projection.h"
 #include "core/math/transform_3d.h"
 #include "core/templates/hash_map.h"
@@ -35,6 +37,7 @@
 #include "servers/rendering/renderer_rd/storage_rd/light_storage.h"
 #include "servers/rendering/renderer_rd/storage_rd/material_storage.h"
 #include "servers/rendering/renderer_rd/storage_rd/mesh_storage.h"
+#include "servers/rendering/renderer_rd/storage_rd/texture_storage.h"
 #include "servers/rendering/renderer_scene_render.h"
 #include "servers/rendering/rendering_server.h"
 
@@ -53,14 +56,26 @@ struct PSXMaterialInfo {
 	Color albedo = Color(0.6, 0.6, 0.6, 1.0).linear_to_srgb();
 	Color emission = Color(0, 0, 0); // Linear, energy applied
 	float metallic = 0.0f;
+	// Albedo texture (texture_albedo) and how it is sampled.
+	RID texture;
+	bool texture_repeat = true;
+	Vector2 uv_scale = Vector2(1, 1);
+	Vector2 uv_offset;
+	uint8_t alpha_mode = psx::ALPHA_IGNORE;
+	float alpha_cut = 0.5f;
 
 	uint32_t hash() const { // Of what is baked into converted meshes.
 		uint32_t h = hash_murmur3_one_32((uint32_t)cull);
-		h = hash_murmur3_one_32((lit ? 1u : 0u) | (semi ? 2u : 0u) | (vertex_colors ? 4u : 0u) | (vertex_colors_srgb ? 8u : 0u) | ((uint32_t)blend << 4), h);
+		h = hash_murmur3_one_32((lit ? 1u : 0u) | (semi ? 2u : 0u) | (vertex_colors ? 4u : 0u) | (vertex_colors_srgb ? 8u : 0u) | ((uint32_t)blend << 4) | (texture_repeat ? 1u << 8 : 0u), h);
 		h = hash_murmur3_one_float(albedo.r, h);
 		h = hash_murmur3_one_float(albedo.g, h);
 		h = hash_murmur3_one_float(albedo.b, h);
 		h = hash_murmur3_one_float(albedo.a, h);
+		h = hash_murmur3_one_64(texture.get_id(), h);
+		h = hash_murmur3_one_float(uv_scale.x, h);
+		h = hash_murmur3_one_float(uv_scale.y, h);
+		h = hash_murmur3_one_float(uv_offset.x, h);
+		h = hash_murmur3_one_float(uv_offset.y, h);
 		return hash_fmix32(h);
 	}
 };
@@ -101,6 +116,37 @@ PSXMaterialInfo psx_read_material(RID p_material) {
 		info.vertex_colors = sd->code.contains("albedo_tex *= COLOR");
 		info.vertex_colors_srgb = sd->code.contains("COLOR.rgb = mix(");
 		emissive = sd->code.contains("EMISSION = ");
+		if (sd->uses_alpha_clip) {
+			info.alpha_mode = psx::ALPHA_CUT;
+		} else if (info.semi && info.blend == psx::BLEND_HALF) {
+			info.alpha_mode = psx::ALPHA_BLEND;
+		}
+		// The albedo sampler's declaration says whether it repeats.
+		const int decl = sd->code.find("uniform sampler2D texture_albedo");
+		if (decl >= 0) {
+			const int end = sd->code.find(";", decl);
+			info.texture_repeat = !sd->code.substr(decl, end - decl).contains("repeat_disable");
+		}
+	}
+	const Variant texture = ms->material_get_param(p_material, "texture_albedo");
+	if (texture.get_type() == Variant::RID) {
+		info.texture = texture;
+	}
+	const Variant uv_scale = ms->material_get_param(p_material, "uv1_scale");
+	if (uv_scale.get_type() == Variant::VECTOR3) {
+		const Vector3 s = uv_scale;
+		info.uv_scale = Vector2(s.x, s.y);
+	}
+	const Variant uv_offset = ms->material_get_param(p_material, "uv1_offset");
+	if (uv_offset.get_type() == Variant::VECTOR3) {
+		const Vector3 o = uv_offset;
+		info.uv_offset = Vector2(o.x, o.y);
+	}
+	if (info.alpha_mode == psx::ALPHA_CUT) {
+		const Variant cut = ms->material_get_param(p_material, "alpha_scissor_threshold");
+		if (cut.get_type() == Variant::FLOAT) {
+			info.alpha_cut = CLAMP((float)cut, 0.0f, 1.0f);
+		}
 	}
 	const Variant albedo = ms->material_get_param(p_material, "albedo");
 	if (albedo.get_type() == Variant::COLOR) {
@@ -127,6 +173,9 @@ struct PSXSceneSettings {
 	Color default_ambient = Color(0.2, 0.2, 0.2);
 	psx::LightingMode lighting = psx::LIGHTING_PS1;
 	float subdivide_size = 1.0f; // Metres; 0 = off
+	psx::TextureOptions texture; // max_size, depth, max_colors (alpha set per material)
+	// Texture banks (1024 x 512 each, bank 0 = VRAM); 0 = as many as needed.
+	uint32_t texture_banks = 0;
 };
 
 struct PSXSceneStats {
@@ -134,6 +183,11 @@ struct PSXSceneStats {
 	uint32_t surfaces = 0;
 	uint32_t conversions = 0;
 	uint32_t skinned = 0;
+	uint32_t texture_uploads = 0; // Textures converted or re-uploaded this frame
+	uint32_t texture_fallbacks = 0; // Surfaces drawn untextured: no VRAM left
+	uint32_t textures_resident = 0;
+	uint32_t vram_free_percent = 100; // Of all texture banks in use
+	uint32_t texture_banks = 1;
 	psx::DrawStats draw;
 };
 
@@ -145,13 +199,28 @@ public:
 
 	PSXSceneSettings settings;
 
+	// Layers 1-20, the ones a VisualInstance3D can be put on.
+	static constexpr uint32_t USER_LAYERS = (1u << 20) - 1;
+
+	// VRAM the textures must not use: the display buffers, and anything else
+	// the caller has put in the texture region.
+	void reserve_vram(int32_t p_x, int32_t p_y, int32_t p_width, int32_t p_height) {
+		if (vram_banks.is_empty()) {
+			vram_banks.resize(1);
+		}
+		vram_banks[0].reserve(p_x, p_y, p_width, p_height);
+	}
+
 	// Draws the scene into p_ot: geometry only. The caller adds the clear and
-	// the drawing environment at the far end.
+	// the drawing environment at the far end. Textures are uploaded to p_gpu's
+	// VRAM as they are first needed, before the OT is drawn.
 	void build(RendererSceneRender *p_scene_render, const RendererSceneRender::CameraData &p_camera, const PagedArray<RenderGeometryInstance *> &p_instances,
-			const PagedArray<RID> &p_lights, RID p_environment, int32_t p_width, int32_t p_height, int p_vram_scale,
+			const PagedArray<RID> &p_lights, RID p_environment, int32_t p_width, int32_t p_height, psx::GPU &p_gpu,
 			psx::PacketBuilder &p_builder, psx::OrderingTable &p_ot, uint64_t p_frame, PSXSceneStats &r_stats) {
 		r_stats = PSXSceneStats();
 		frame = p_frame;
+		gpu = &p_gpu;
+		const int vram_scale = p_gpu.get_scale();
 		Frame f;
 		f.builder = &p_builder;
 		f.ot = &p_ot;
@@ -163,7 +232,7 @@ public:
 		// Projection.
 		const Projection &proj = p_camera.main_projection;
 		const double p00 = proj.columns[0][0], p11 = proj.columns[1][1];
-		f.gte.scale = p_vram_scale;
+		f.gte.scale = vram_scale;
 		f.gte.ofx = (p_width / 2) * 65536;
 		f.gte.ofy = (p_height / 2) * 65536;
 		f.ortho = p_camera.is_orthogonal;
@@ -201,6 +270,12 @@ public:
 			if (!inst->data) {
 				continue;
 			}
+			// Editor helpers (grid, origin axes, gizmos, selection boxes) sit
+			// only on layers 21-32, which nodes cannot use; they are not part
+			// of the game's picture, and some are enormous.
+			if ((inst->layer_mask & USER_LAYERS) == 0) {
+				continue;
+			}
 			if (inst->data->base_type == RSE::INSTANCE_MESH) {
 				_draw_instance(f, mesh_storage, inst, inst->data->base, inst->transform);
 			} else if (inst->data->base_type == RSE::INSTANCE_MULTIMESH) {
@@ -209,6 +284,17 @@ public:
 			// Particles: not drawn yet.
 		}
 		_evict();
+		r_stats.textures_resident = 0;
+		for (const KeyValue<uint64_t, TextureEntry> &kv : textures) {
+			r_stats.textures_resident += kv.value.placed ? 1 : 0;
+		}
+		uint64_t free_cells = 0;
+		for (const psx::VramAllocator &a : vram_banks) {
+			free_cells += a.free_cells();
+		}
+		const uint64_t bank_cells = psx::VramAllocator::GRID_W * psx::VramAllocator::GRID_H;
+		r_stats.texture_banks = MAX(1u, vram_banks.size());
+		r_stats.vram_free_percent = vram_banks.is_empty() ? 100 : (uint32_t)(free_cells * 100 / (bank_cells * vram_banks.size()));
 	}
 
 	// The clear colour for this frame: the environment's background colour,
@@ -234,6 +320,7 @@ private:
 		LocalVector<int32_t> bones;
 		LocalVector<float> weights;
 		int influences = 0;
+		Vector2 uv_min, uv_max; // UV bounds (when there are UVs)
 	};
 
 	struct MeshEntry {
@@ -285,6 +372,47 @@ private:
 	float fog_sky_affect = 0.0f;
 	uint64_t frame = 0;
 
+	// A converted texture and where it lives in VRAM (or a texture bank),
+	// shared by every use that converts to the same texels and palette. The
+	// data is kept while the entry exists, so an evicted texture can be
+	// uploaded again.
+	struct TextureEntry {
+		psx::TextureData data;
+		bool needs_semi_clut = false;
+		bool placed = false;
+		uint16_t bank = 0;
+		int32_t x = 0, y = 0, clut_x = 0, clut_y = 0, semi_x = -1, semi_y = 0, white_x = -1, white_y = 0;
+		psx::DrawTexture draw[4]; // Per blend mode
+		uint64_t last_used = 0;
+		uint64_t retry_frame = 0; // Next frame to try placing it again
+	};
+	HashMap<uint64_t, TextureEntry> textures; // By content
+
+	// One material texture as one surface uses it: cropped to the box its
+	// UVs cover (whole when they repeat), converted, and the UV transform
+	// that maps the surface's UVs into the crop.
+	struct TextureUse {
+		bool valid = false; // False: no usable image
+		uint64_t content = 0; // Key into textures
+		Vector2 uv_scale = Vector2(1, 1);
+		Vector2 uv_offset;
+		uint64_t last_used = 0;
+	};
+	HashMap<uint64_t, TextureUse> texture_uses;
+
+	// Images read back from Godot's texture storage, as RGBA8.
+	struct SourceImage {
+		Ref<Image> image;
+		uint64_t last_used = 0;
+	};
+	HashMap<RID, SourceImage> source_images;
+
+	// Texture space: bank 0 is VRAM's texture region (shared with the display
+	// buffers at scale 1); banks 1.. are added while settings.texture_banks
+	// allows (0 = up to psx::MAX_TEXTURE_BANKS).
+	LocalVector<psx::VramAllocator> vram_banks;
+	psx::GPU *gpu = nullptr;
+
 	static int32_t _to_int32(double p_value) {
 		return (int32_t)CLAMP(std::llround(p_value), (long long)INT32_MIN, (long long)INT32_MAX);
 	}
@@ -313,13 +441,23 @@ private:
 		}
 		const int32_t bucket = (int32_t)std::lround(std::log2(s) * 8.0);
 		const double sb = std::exp2(bucket / 8.0);
+		// Non-uniform scale: normals take the inverse scale (relative to the
+		// largest axis, in 1/64 steps) at conversion; lights use the rotation.
+		Vector3 normal_scale(1, 1, 1);
+		const double axis_scale[3] = { b.get_column(0).length(), b.get_column(1).length(), b.get_column(2).length() };
+		for (int a = 0; a < 3; a++) {
+			const double r = MAX(1.0, std::round(axis_scale[a] / s * 64.0)) / 64.0;
+			normal_scale[a] = (real_t)(1.0 / r);
+		}
 
 		f.gte.translation.x = _to_int32(f.row_scale[0] * f.world * view.origin.x);
 		f.gte.translation.y = _to_int32(f.row_scale[1] * f.world * view.origin.y);
 		f.gte.translation.z = _to_int32(f.row_scale[2] * f.world * view.origin.z);
 		const double radius = entry->aabb.size.length() * 0.5 * s;
 		_load_lights(f, p_transform, p_transform.xform(entry->aabb.get_center()), radius);
-		const Transform3D object_inv = p_transform.affine_inverse();
+		// Point lights are placed in the instance's rotation-only frame (see
+		// PointLight and DrawParams::point_scale).
+		const Basis rotation_inv = p_transform.basis.orthonormalized().transposed();
 
 		// Skinned: bone matrices for this frame (Godot's skinning transforms).
 		const RID skeleton = p_inst->data->skeleton;
@@ -345,13 +483,27 @@ private:
 			if (!material.is_valid()) {
 				material = p_storage->mesh_surface_get_material(p_mesh, surface);
 			}
-			const PSXMaterialInfo mat = psx_read_material<ShaderDataT>(material);
+			PSXMaterialInfo mat = psx_read_material<ShaderDataT>(material);
+			TextureEntry *tex = _get_texture(mat, src, *f.stats);
+			if (tex && !tex->placed) {
+				// No room in VRAM: untextured, tinted by the texture's average colour.
+				f.stats->texture_fallbacks++;
+				const Color mean = Color(tex->data.mean[0] / 255.0f, tex->data.mean[1] / 255.0f, tex->data.mean[2] / 255.0f).srgb_to_linear();
+				const Color lin = Color(mat.albedo.r, mat.albedo.g, mat.albedo.b).srgb_to_linear() * mean;
+				mat.albedo = Color(lin.r, lin.g, lin.b).linear_to_srgb();
+				mat.albedo.a = 1.0f;
+				mat.texture = RID();
+				tex = nullptr;
+			} else if (!tex) {
+				mat.texture = RID();
+			}
+			const psx::TextureData *tex_data = tex ? &tex->data : nullptr;
 
 			const psx::MeshData *data = nullptr;
 			if (skinned && src.influences > 0) {
-				data = _skin(src, mat, sb, f);
+				data = _skin(src, mat, tex_data, normal_scale, sb, f);
 			} else {
-				data = _get_converted(*entry, surface, bucket, sb, mat, *f.stats);
+				data = _get_converted(*entry, surface, bucket, sb, mat, tex_data, normal_scale, *f.stats);
 			}
 			if (!data) {
 				continue;
@@ -378,7 +530,7 @@ private:
 			for (int l = 0; l < f.near_light_count; l++) {
 				const Light &src_light = *f.near_lights[l];
 				psx::PointLight &pl = point_lights[l];
-				const Vector3 p = object_inv.xform(src_light.position) * units_per_mesh_unit;
+				const Vector3 p = rotation_inv.xform(src_light.position - p_transform.origin) * (units_per_mesh_unit / s);
 				pl.position[0] = (float)p.x;
 				pl.position[1] = (float)p.y;
 				pl.position[2] = (float)p.z;
@@ -388,7 +540,7 @@ private:
 				pl.color[0] = src_light.color.r * diffuse;
 				pl.color[1] = src_light.color.g * diffuse;
 				pl.color[2] = src_light.color.b * diffuse;
-				const Vector3 axis = object_inv.basis.xform(src_light.spot_axis).normalized();
+				const Vector3 axis = rotation_inv.xform(src_light.spot_axis).normalized();
 				pl.spot_axis[0] = (float)axis.x;
 				pl.spot_axis[1] = (float)axis.y;
 				pl.spot_axis[2] = (float)axis.z;
@@ -397,6 +549,9 @@ private:
 
 			psx::DrawParams params;
 			params.point_lights = point_lights;
+			for (int a = 0; a < 3; a++) {
+				params.point_scale[a] = (float)(1.0 / normal_scale[a]);
+			}
 			params.point_light_count = mat.lit ? f.near_light_count : 0;
 			params.cull = mat.cull;
 			params.lit = mat.lit;
@@ -408,6 +563,7 @@ private:
 			params.fog = f.fog;
 			params.semi = mat.semi;
 			params.blend = mat.blend;
+			params.texture = tex ? &tex->draw[mat.blend & 3] : nullptr;
 			params.ortho = f.ortho;
 			params.near_z = f.near_z;
 			params.ot_shift = f.ot_shift;
@@ -447,7 +603,7 @@ private:
 
 	// Linear-blend skinning on the CPU, then a fresh conversion (not cached:
 	// the pose changes every frame). Returns nullptr if nothing to draw.
-	const psx::MeshData *_skin(const SourceSurface &p_src, const PSXMaterialInfo &p_mat, double p_scale, Frame &f) {
+	const psx::MeshData *_skin(const SourceSurface &p_src, const PSXMaterialInfo &p_mat, const psx::TextureData *p_texture, const Vector3 &p_normal_scale, double p_scale, Frame &f) {
 		const uint32_t n = p_src.vertex_count;
 		const int inf = p_src.influences;
 		const bool has_normals = !p_src.normals.is_empty();
@@ -486,7 +642,7 @@ private:
 		psx::MeshInput in = _input(p_src);
 		in.positions = skin_positions.ptr();
 		in.normals = has_normals ? skin_normals.ptr() : nullptr;
-		const psx::ConvertOptions opt = _options(p_mat, p_scale);
+		const psx::ConvertOptions opt = _options(p_mat, p_texture, p_normal_scale, p_scale);
 		psx::convert_mesh(in, opt, skin_mesh);
 		f.stats->skinned++;
 		return skin_mesh.indices.empty() ? nullptr : &skin_mesh;
@@ -504,7 +660,7 @@ private:
 		return in;
 	}
 
-	psx::ConvertOptions _options(const PSXMaterialInfo &p_mat, double p_scale) const {
+	psx::ConvertOptions _options(const PSXMaterialInfo &p_mat, const psx::TextureData *p_texture, const Vector3 &p_normal_scale, double p_scale) const {
 		psx::ConvertOptions opt;
 		opt.scale = (float)(settings.world_scale * p_scale);
 		opt.albedo[0] = p_mat.albedo.r;
@@ -515,6 +671,18 @@ private:
 		opt.vertex_colors_srgb = p_mat.vertex_colors_srgb;
 		opt.use_alpha = p_mat.semi && p_mat.blend == psx::BLEND_HALF;
 		opt.max_edge = settings.subdivide_size * settings.world_scale;
+		opt.normal_scale[0] = (float)p_normal_scale.x;
+		opt.normal_scale[1] = (float)p_normal_scale.y;
+		opt.normal_scale[2] = (float)p_normal_scale.z;
+		if (p_texture) {
+			opt.texture_width = p_texture->width;
+			opt.texture_height = p_texture->height;
+			opt.texture_repeat = p_mat.texture_repeat;
+			opt.uv_scale[0] = p_mat.uv_scale.x;
+			opt.uv_scale[1] = p_mat.uv_scale.y;
+			opt.uv_offset[0] = p_mat.uv_offset.x;
+			opt.uv_offset[1] = p_mat.uv_offset.y;
+		}
 		return opt;
 	}
 
@@ -578,7 +746,13 @@ private:
 					dst.colors[v * 4 + 3] = colors[v].a;
 				}
 			}
-			if (uvs.size() == n) {
+			if (uvs.size() == n && n > 0) {
+				dst.uv_min = uvs[0];
+				dst.uv_max = uvs[0];
+				for (int v = 1; v < n; v++) {
+					dst.uv_min = dst.uv_min.min(uvs[v]);
+					dst.uv_max = dst.uv_max.max(uvs[v]);
+				}
 				dst.uvs.resize(n * 2);
 				for (int v = 0; v < n; v++) {
 					dst.uvs[v * 2 + 0] = (float)uvs[v].x;
@@ -602,14 +776,21 @@ private:
 		return entry;
 	}
 
-	const psx::MeshData *_get_converted(MeshEntry &p_entry, uint32_t p_surface, int32_t p_bucket, double p_scale, const PSXMaterialInfo &p_mat, PSXSceneStats &r_stats) {
-		uint64_t key = ((uint64_t)p_mat.hash() << 32) | ((uint64_t)(uint16_t)p_bucket << 16) | (p_surface & 0xFFFF);
+	const psx::MeshData *_get_converted(MeshEntry &p_entry, uint32_t p_surface, int32_t p_bucket, double p_scale, const PSXMaterialInfo &p_mat, const psx::TextureData *p_texture, const Vector3 &p_normal_scale, PSXSceneStats &r_stats) {
+		uint32_t h = p_mat.hash();
+		for (int a = 0; a < 3; a++) {
+			h = hash_murmur3_one_float((float)p_normal_scale[a], h);
+		}
+		if (p_texture) {
+			h = hash_murmur3_one_32((uint32_t)(p_texture->width | p_texture->height << 16), h);
+		}
+		const uint64_t key = ((uint64_t)hash_fmix32(h) << 32) | ((uint64_t)(uint16_t)p_bucket << 16) | (p_surface & 0xFFFF);
 		psx::MeshData *found = p_entry.converted.getptr(key);
 		if (found) {
 			return found->indices.empty() ? nullptr : found;
 		}
 		const psx::MeshInput in = _input(p_entry.surfaces[p_surface]);
-		const psx::ConvertOptions opt = _options(p_mat, p_scale);
+		const psx::ConvertOptions opt = _options(p_mat, p_texture, p_normal_scale, p_scale);
 		psx::MeshData &out = p_entry.converted.insert(key, psx::MeshData())->value;
 		psx::convert_mesh(in, opt, out); // Empty on failure: remembered, not retried.
 		r_stats.conversions++;
@@ -617,6 +798,238 @@ private:
 			WARN_PRINT_ONCE("PSX: a mesh is too large for 16-bit GTE coordinates and was clamped; lower rendering/psx/world_scale or split the mesh.");
 		}
 		return out.indices.empty() ? nullptr : &out;
+	}
+
+	// The material's albedo texture as this surface uses it, converted (once)
+	// and placed in texture memory. nullptr when it has none or its image
+	// cannot be read; placed is false when texture memory is full even after
+	// evicting textures not used this frame. Updates p_mat's UV transform for
+	// the crop.
+	TextureEntry *_get_texture(PSXMaterialInfo &p_mat, const SourceSurface &p_src, PSXSceneStats &r_stats) {
+		RendererRD::TextureStorage *ts = RendererRD::TextureStorage::get_singleton();
+		if (!p_mat.texture.is_valid() || !ts->owns_texture(p_mat.texture) || p_src.uvs.is_empty()) {
+			return nullptr;
+		}
+		const Ref<Image> image = _source_image(ts, p_mat.texture);
+		if (image.is_null()) {
+			return nullptr;
+		}
+		// Crop: per axis, the power-of-two box of whole texels the UVs cover,
+		// or the whole axis when they repeat or the box is not smaller.
+		const int32_t size[2] = { image->get_width(), image->get_height() };
+		int32_t start[2] = { 0, 0 }, extent[2] = { size[0], size[1] };
+		for (int a = 0; a < 2; a++) {
+			const double s0 = p_src.uv_min[a] * p_mat.uv_scale[a] + p_mat.uv_offset[a];
+			const double s1 = p_src.uv_max[a] * p_mat.uv_scale[a] + p_mat.uv_offset[a];
+			const double lo = MIN(s0, s1), hi = MAX(s0, s1);
+			if (lo < -1e-4 || hi > 1.0 + 1e-4) {
+				continue;
+			}
+			const int32_t first = CLAMP((int32_t)std::floor(lo * size[a]), 0, size[a] - 1);
+			const int32_t used = MAX(1, (int32_t)std::ceil(hi * size[a]) - first);
+			int32_t box = 8;
+			while (box < used) {
+				box <<= 1;
+			}
+			if (box >= size[a]) {
+				continue;
+			}
+			start[a] = MIN(first, size[a] - box);
+			extent[a] = box;
+		}
+
+		// The converted texels depend on how the material uses alpha.
+		uint32_t h = hash_murmur3_one_32(p_mat.alpha_mode | (p_mat.semi ? 0x100u : 0u));
+		h = hash_murmur3_one_float(p_mat.alpha_mode == psx::ALPHA_CUT ? p_mat.alpha_cut : 0.0f, h);
+		h = hash_murmur3_one_32((uint32_t)start[0] | (uint32_t)start[1] << 16, h);
+		h = hash_murmur3_one_32((uint32_t)extent[0] | (uint32_t)extent[1] << 16, h);
+		const uint64_t id = p_mat.texture.get_id();
+		const uint64_t key = ((uint64_t)hash_murmur3_one_64(id, h) << 32) | (id & 0xFFFFFFFFu);
+		TextureUse *use = texture_uses.getptr(key);
+		if (!use) {
+			use = &texture_uses.insert(key, TextureUse())->value;
+			psx::TextureData data;
+			use->valid = _convert_texture(image, Rect2i(start[0], start[1], extent[0], extent[1]), p_mat, data);
+			r_stats.conversions++;
+			if (use->valid) {
+				for (int a = 0; a < 2; a++) {
+					use->uv_scale[a] = (real_t)size[a] / extent[a];
+					use->uv_offset[a] = -(real_t)start[a] / extent[a];
+				}
+				// Identical texels and palettes share one copy.
+				uint32_t c = hash_murmur3_buffer(data.texels.data(), (int)(data.texels.size() * sizeof(uint16_t)));
+				c = hash_murmur3_buffer(data.clut.data(), (int)(data.clut.size() * sizeof(uint16_t)), c);
+				c = hash_murmur3_one_32((uint32_t)data.width | (uint32_t)data.height << 12 | (uint32_t)data.depth << 24 | (p_mat.semi ? 1u << 28 : 0u), c);
+				const uint32_t c2 = hash_murmur3_buffer(data.clut_semi.data(), (int)(data.clut_semi.size() * sizeof(uint16_t)), c ^ 0x9E3779B9u);
+				use->content = ((uint64_t)c << 32) | c2;
+				if (!textures.has(use->content)) {
+					TextureEntry &e = textures.insert(use->content, TextureEntry())->value;
+					e.data = std::move(data);
+					e.needs_semi_clut = p_mat.semi;
+				}
+			}
+		}
+		use->last_used = frame;
+		if (!use->valid) {
+			return nullptr;
+		}
+		TextureEntry *e = textures.getptr(use->content);
+		if (!e) {
+			return nullptr;
+		}
+		e->last_used = frame;
+		if (!e->placed && frame >= e->retry_frame) {
+			_place_texture(*e, r_stats);
+		}
+		// Surface UVs -> crop UVs, after the material's own transform.
+		p_mat.uv_offset = p_mat.uv_offset * use->uv_scale + use->uv_offset;
+		p_mat.uv_scale = p_mat.uv_scale * use->uv_scale;
+		return e;
+	}
+
+	Ref<Image> _source_image(RendererRD::TextureStorage *p_storage, RID p_texture) {
+		SourceImage *found = source_images.getptr(p_texture);
+		if (found) {
+			found->last_used = frame;
+			return found->image;
+		}
+		SourceImage &entry = source_images.insert(p_texture, SourceImage())->value;
+		entry.last_used = frame;
+		const Ref<Image> source = p_storage->texture_2d_get(p_texture);
+		if (source.is_null() || source->is_empty()) {
+			return Ref<Image>();
+		}
+		Ref<Image> image;
+		image.instantiate();
+		image->copy_internals_from(source);
+		if (image->is_compressed()) {
+			image->decompress();
+			if (image->is_compressed()) {
+				WARN_PRINT_ONCE("PSX: a texture's compressed format cannot be decompressed; it is drawn untextured. Import it as Lossless.");
+				return Ref<Image>();
+			}
+		}
+		image->clear_mipmaps();
+		image->convert(Image::FORMAT_RGBA8);
+		entry.image = image;
+		return image;
+	}
+
+	bool _convert_texture(const Ref<Image> &p_image, const Rect2i &p_crop, const PSXMaterialInfo &p_mat, psx::TextureData &r_data) const {
+		const Ref<Image> crop = (p_crop.position == Point2i() && p_crop.size == p_image->get_size()) ? p_image : p_image->get_region(p_crop);
+		psx::TextureOptions opt = settings.texture;
+		opt.alpha_mode = p_mat.alpha_mode;
+		opt.alpha_cut = p_mat.alpha_cut;
+		const Vector<uint8_t> bytes = crop->get_data();
+		return psx::convert_texture(bytes.ptr(), crop->get_width(), crop->get_height(), opt, r_data);
+	}
+
+	// Finds room for a texture and its CLUTs (the palette; the all-STP one
+	// for blended materials; the all-white one for the fog pass of
+	// cut-outs) in one bank, adding banks while allowed, then evicting.
+	void _place_texture(TextureEntry &e, PSXSceneStats &r_stats) {
+		const psx::TextureData &d = e.data;
+		const int32_t entries = d.clut_entries();
+		const uint32_t max_banks = settings.texture_banks == 0 ? psx::MAX_TEXTURE_BANKS + 1 : MIN(settings.texture_banks, psx::MAX_TEXTURE_BANKS + 1);
+		if (vram_banks.is_empty()) {
+			vram_banks.resize(1);
+		}
+		for (;;) {
+			for (uint32_t bank = 0; bank <= vram_banks.size(); bank++) {
+				if (bank == vram_banks.size()) {
+					if (bank >= max_banks) {
+						break;
+					}
+					vram_banks.push_back(psx::VramAllocator()); // A new, empty bank.
+				}
+				psx::VramAllocator &a = vram_banks[bank];
+				int32_t x = 0, y = 0, cx = 0, cy = 0, sx = -1, sy = 0, wx = -1, wy = 0;
+				const bool box = a.alloc(d.hw_width(), d.height, x, y);
+				const bool clut = box && (entries == 0 || a.alloc_clut(entries, cx, cy));
+				const bool semi = clut && (entries == 0 || !e.needs_semi_clut || a.alloc_clut(entries, sx, sy));
+				const bool white = semi && (entries == 0 || !d.has_transparent || a.alloc_clut(entries, wx, wy));
+				if (white) {
+					const uint16_t b = (uint16_t)bank;
+					psx::upload_rect(*gpu, x, y, d.hw_width(), d.height, d.texels.data(), b);
+					if (entries > 0) {
+						psx::upload_rect(*gpu, cx, cy, entries, 1, d.clut.data(), b);
+						if (sx >= 0) {
+							psx::upload_rect(*gpu, sx, sy, entries, 1, d.clut_semi.data(), b);
+						}
+						if (wx >= 0) {
+							psx::upload_rect(*gpu, wx, wy, entries, 1, d.clut_white.data(), b);
+						}
+					}
+					e.placed = true;
+					e.bank = b;
+					e.x = x;
+					e.y = y;
+					e.clut_x = cx;
+					e.clut_y = cy;
+					e.semi_x = sx;
+					e.semi_y = sy;
+					e.white_x = wx;
+					e.white_y = wy;
+					for (int mode = 0; mode < 4; mode++) {
+						e.draw[mode] = psx::make_draw_texture(d, x, y, cx, cy, sx, sy, wx, wy, (uint8_t)mode, true, b);
+					}
+					r_stats.texture_uploads++;
+					return;
+				}
+				if (semi && sx >= 0) {
+					a.free_clut(sx, sy, entries);
+				}
+				if (clut && entries > 0) {
+					a.free_clut(cx, cy, entries);
+				}
+				if (box) {
+					a.free(x, y, d.hw_width(), d.height);
+				}
+			}
+			if (!_evict_one_texture()) {
+				e.retry_frame = frame + 30; // Try again later, not every frame.
+				WARN_PRINT_ONCE("PSX: texture memory is full; some surfaces are drawn untextured. Raise rendering/psx/textures/vram_banks, lower rendering/psx/textures/max_size or use fewer textures.");
+				return;
+			}
+		}
+	}
+
+	// Frees the least recently used texture that this frame has not drawn.
+	bool _evict_one_texture() {
+		TextureEntry *oldest = nullptr;
+		for (KeyValue<uint64_t, TextureEntry> &kv : textures) {
+			TextureEntry &t = kv.value;
+			if (t.placed && t.last_used < frame && (!oldest || t.last_used < oldest->last_used)) {
+				oldest = &t;
+			}
+		}
+		if (!oldest) {
+			return false;
+		}
+		_unplace_texture(*oldest);
+		return true;
+	}
+
+	void _unplace_texture(TextureEntry &e) {
+		if (!e.placed || e.bank >= vram_banks.size()) {
+			e.placed = false;
+			return;
+		}
+		psx::VramAllocator &a = vram_banks[e.bank];
+		const int32_t entries = e.data.clut_entries();
+		a.free(e.x, e.y, e.data.hw_width(), e.data.height);
+		if (entries > 0) {
+			a.free_clut(e.clut_x, e.clut_y, entries);
+			if (e.semi_x >= 0) {
+				a.free_clut(e.semi_x, e.semi_y, entries);
+			}
+			if (e.white_x >= 0) {
+				a.free_clut(e.white_x, e.white_y, entries);
+			}
+		}
+		e.placed = false;
+		e.semi_x = -1;
+		e.white_x = -1;
 	}
 
 	void _evict() {
@@ -628,6 +1041,34 @@ private:
 		}
 		for (const RID &rid : stale) {
 			meshes.erase(rid);
+		}
+		LocalVector<uint64_t> stale_uses;
+		for (const KeyValue<uint64_t, TextureUse> &kv : texture_uses) {
+			if (frame - kv.value.last_used > CACHE_KEEP_FRAMES) {
+				stale_uses.push_back(kv.key);
+			}
+		}
+		for (const uint64_t key : stale_uses) {
+			texture_uses.erase(key);
+		}
+		LocalVector<RID> stale_images;
+		for (const KeyValue<RID, SourceImage> &kv : source_images) {
+			if (frame - kv.value.last_used > CACHE_KEEP_FRAMES) {
+				stale_images.push_back(kv.key);
+			}
+		}
+		for (const RID &rid : stale_images) {
+			source_images.erase(rid);
+		}
+		LocalVector<uint64_t> stale_textures;
+		for (KeyValue<uint64_t, TextureEntry> &kv : textures) {
+			if (frame - kv.value.last_used > CACHE_KEEP_FRAMES) {
+				_unplace_texture(kv.value);
+				stale_textures.push_back(kv.key);
+			}
+		}
+		for (const uint64_t key : stale_textures) {
+			textures.erase(key);
 		}
 	}
 
@@ -795,7 +1236,8 @@ private:
 				}
 			}
 		}
-		const Basis inv = p_object.basis.inverse();
+		// The rotation only: normals already carry the inverse scale.
+		const Basis inv = p_object.basis.orthonormalized().transposed();
 		f.gte.light_dirs = psx::Matrix();
 		for (int k = 0; k < 3; k++) {
 			f.light_colors[k][0] = f.light_colors[k][1] = f.light_colors[k][2] = 0.0f;
