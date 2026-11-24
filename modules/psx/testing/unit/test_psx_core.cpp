@@ -731,6 +731,73 @@ static void test_convert_texture() {
 	CHECK(!convert_texture(nullptr, 0, 0, opt, t));
 }
 
+static void test_baked_textures() {
+	// Round trip: every variant comes back exactly as converted.
+	const std::vector<uint8_t> img = rgba_image(20, 12, [](int x, int y) -> uint32_t {
+		const uint32_t a = x < 3 ? 0x00u : (x < 6 ? 0x80u : 0xFFu);
+		return (a << 24) | (uint32_t)(x * 12) | ((uint32_t)(y * 20) << 8) | ((uint32_t)((x ^ y) * 9 & 255) << 16);
+	});
+	std::vector<BakedTexture> baked(4);
+	const uint8_t modes[4] = { ALPHA_IGNORE, ALPHA_CUT, ALPHA_BLEND, ALPHA_IGNORE };
+	for (int i = 0; i < 4; i++) {
+		TextureOptions opt;
+		opt.alpha_mode = modes[i];
+		opt.alpha_cut = 0.4f;
+		opt.depth = i == 3 ? DEPTH_FORCE_15BIT : DEPTH_AUTO;
+		baked[i].alpha_mode = modes[i];
+		baked[i].alpha_cut = 0.4f;
+		CHECK(convert_texture(img.data(), 20, 12, opt, baked[i].data));
+	}
+	std::vector<uint8_t> bytes;
+	write_baked_textures(baked, bytes);
+	std::vector<BakedTexture> back;
+	CHECK(read_baked_textures(bytes.data(), bytes.size(), back));
+	CHECK_EQ((int)back.size(), 4);
+	for (int i = 0; i < 4 && i < (int)back.size(); i++) {
+		const TextureData &a = baked[i].data, &b = back[i].data;
+		CHECK_EQ(back[i].alpha_mode, baked[i].alpha_mode);
+		CHECK(back[i].alpha_cut == 0.4f);
+		CHECK_EQ(b.width, a.width);
+		CHECK_EQ(b.height, a.height);
+		CHECK_EQ(b.depth, a.depth);
+		CHECK(b.has_transparent == a.has_transparent);
+		CHECK(b.has_semi == a.has_semi);
+		CHECK_EQ(b.colors, a.colors);
+		CHECK(b.mean[0] == a.mean[0] && b.mean[1] == a.mean[1] && b.mean[2] == a.mean[2]);
+		CHECK(b.clut == a.clut);
+		CHECK(b.clut_semi == a.clut_semi);
+		CHECK(b.clut_white == a.clut_white);
+		CHECK(b.texels == a.texels);
+	}
+
+	// Cut short, wrong magic or a bad size: refused, nothing returned.
+	CHECK(!read_baked_textures(bytes.data(), bytes.size() - 1, back));
+	CHECK(back.empty());
+	std::vector<uint8_t> bad = bytes;
+	bad[0] ^= 1;
+	CHECK(!read_baked_textures(bad.data(), bad.size(), back));
+	bad = bytes;
+	bad[17] = 7; // First texture's width: 7 is not a power of two
+	CHECK(!read_baked_textures(bad.data(), bad.size(), back));
+	CHECK(!read_baked_textures(nullptr, 0, back));
+
+	// Decoding: transparent texels have alpha 0, STP texels 128 when asked.
+	std::vector<uint8_t> rgba;
+	const TextureData &blend = baked[2].data;
+	decode_texture(blend, true, rgba);
+	CHECK_EQ((int)rgba.size(), blend.width * blend.height * 4);
+	CHECK_EQ(rgba[3], 0); // x = 0: alpha 0
+	const int semi_x = 5 * blend.width / 20; // Source x = 5: half alpha
+	CHECK_EQ(rgba[semi_x * 4 + 3], 128);
+	CHECK_EQ(rgba[(blend.width - 1) * 4 + 3], 255);
+	// 15-bit decodes the texel itself: 5 bits widened to 8.
+	const TextureData &direct = baked[3].data;
+	decode_texture(direct, false, rgba);
+	const uint16_t c = direct.texels[direct.width - 1];
+	CHECK_EQ(rgba[(direct.width - 1) * 4 + 0], (uint8_t)(((c & 31) << 3) | ((c & 31) >> 2)));
+	CHECK_EQ(rgba[(direct.width - 1) * 4 + 3], 255);
+}
+
 static void test_vram_allocator() {
 	VramAllocator a;
 	a.reserve(0, 0, 320, 480); // Display buffers
@@ -1529,6 +1596,7 @@ int main(int argc, char **argv) {
 		{ "draw_mesh_features", test_draw_mesh_features },
 		{ "subdivide_and_point_lights", test_subdivide_and_point_lights },
 		{ "convert_texture", test_convert_texture },
+		{ "baked_textures", test_baked_textures },
 		{ "vram_allocator", test_vram_allocator },
 		{ "textured_mesh", test_textured_mesh },
 		{ "half_open_coverage", test_half_open_coverage },

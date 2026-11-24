@@ -5,6 +5,12 @@ extends Node3D
 ## quantisation), a 256 x 256 wall repeated twice (split at tile edges), an
 ## alpha-scissor fence, an alpha-blended glass pane, a clamped decal and an
 ## unshaded sign.
+##
+## With baked on (textured_baked.tscn), every texture is a PSXTexture baked
+## in code, as the PSX Texture importer makes them: the PS1 frame must match
+## the textured goldens exactly.
+
+@export var baked := false
 
 
 func _ready() -> void:
@@ -71,11 +77,14 @@ func _ready() -> void:
 	_add(sign_mesh, sign_mat, Transform3D(Basis(), Vector3(2.2, 2.2, -5.9)))
 
 
-func _image(w: int, h: int, fn: Callable) -> ImageTexture:
+func _image(w: int, h: int, fn: Callable) -> Texture2D:
 	var img := Image.create_empty(w, h, false, Image.FORMAT_RGBA8)
 	for y in h:
 		for x in w:
 			img.set_pixel(x, y, fn.call(x, y))
+	if baked:
+		# No preview: Godot's side keeps the source image, as runtime conversion reads it.
+		return PSXTexture.bake(img, 0, -1, -1, 0.5, false)
 	return ImageTexture.create_from_image(img)
 
 

@@ -27,6 +27,7 @@
 #include "psx_core/psx_ot.h"
 #include "psx_core/psx_render.h"
 #include "psx_core/psx_texture.h"
+#include "psx_texture_resource.h"
 
 #include "core/io/image.h"
 #include "core/math/projection.h"
@@ -249,6 +250,7 @@ struct PSXSceneStats {
 	uint32_t texture_uploads = 0; // Textures converted or re-uploaded this frame
 	uint32_t texture_fallbacks = 0; // Surfaces drawn untextured: no VRAM left
 	uint32_t textures_resident = 0;
+	uint32_t textures_baked = 0; // Resident textures that came from a PSXTexture (not converted)
 	uint32_t vram_free_percent = 100; // Of all texture banks in use
 	uint32_t texture_banks = 1;
 	psx::DrawStats draw;
@@ -349,8 +351,10 @@ public:
 		}
 		_evict();
 		r_stats.textures_resident = 0;
+		r_stats.textures_baked = 0;
 		for (const KeyValue<uint64_t, TextureEntry> &kv : textures) {
 			r_stats.textures_resident += kv.value.placed ? 1 : 0;
+			r_stats.textures_baked += (kv.value.placed && kv.value.baked) ? 1 : 0;
 		}
 		uint64_t free_cells = 0;
 		for (const psx::VramAllocator &a : vram_banks) {
@@ -448,6 +452,7 @@ private:
 		psx::TextureData data;
 		bool needs_semi_clut = false;
 		bool placed = false;
+		bool baked = false; // From a PSXTexture's baked data
 		uint16_t bank = 0;
 		int32_t x = 0, y = 0, clut_x = 0, clut_y = 0, semi_x = -1, semi_y = 0, white_x = -1, white_y = 0;
 		psx::DrawTexture draw[4]; // Per blend mode
@@ -917,6 +922,66 @@ private:
 		if (!p_mat.texture.is_valid() || !ts->owns_texture(p_mat.texture) || p_src.uvs.is_empty()) {
 			return nullptr;
 		}
+		// Baked at import (PSXTexture): used whole, exactly as imported.
+		const uint32_t baked_version = PSXTexture::get_baked_version(p_mat.texture, p_mat.alpha_mode, p_mat.alpha_cut);
+		TextureUse *use = nullptr;
+		if (baked_version != 0) {
+			const uint32_t h = hash_murmur3_one_32(baked_version, hash_murmur3_one_32(0xBA4Eu | (p_mat.semi ? 0x10000u : 0u) | (uint32_t)p_mat.alpha_mode << 20));
+			const uint64_t id = p_mat.texture.get_id();
+			const uint64_t key = ((uint64_t)hash_murmur3_one_64(id, h) << 32) | (id & 0xFFFFFFFFu);
+			use = texture_uses.getptr(key);
+			if (!use) {
+				use = &texture_uses.insert(key, TextureUse())->value;
+				psx::TextureData data;
+				uint32_t version = 0;
+				use->valid = PSXTexture::find_baked(p_mat.texture, p_mat.alpha_mode, p_mat.alpha_cut, data, version);
+				if (use->valid) {
+					_store_texture(*use, std::move(data), p_mat.semi, true);
+				}
+			}
+		} else {
+			use = _converted_texture_use(ts, p_mat, p_src, r_stats);
+			if (!use) {
+				return nullptr;
+			}
+		}
+		use->last_used = frame;
+		if (!use->valid) {
+			return nullptr;
+		}
+		TextureEntry *e = textures.getptr(use->content);
+		if (!e) {
+			return nullptr;
+		}
+		e->last_used = frame;
+		if (!e->placed && frame >= e->retry_frame) {
+			_place_texture(*e, r_stats);
+		}
+		// Surface UVs -> crop UVs, after the material's own transform.
+		p_mat.uv_offset = p_mat.uv_offset * use->uv_scale + use->uv_offset;
+		p_mat.uv_scale = p_mat.uv_scale * use->uv_scale;
+		return e;
+	}
+
+	// Identical texels and palettes share one TextureEntry.
+	void _store_texture(TextureUse &r_use, psx::TextureData &&p_data, bool p_semi, bool p_baked) {
+		const psx::TextureData &data = p_data;
+		uint32_t c = hash_murmur3_buffer(data.texels.data(), (int)(data.texels.size() * sizeof(uint16_t)));
+		c = hash_murmur3_buffer(data.clut.data(), (int)(data.clut.size() * sizeof(uint16_t)), c);
+		c = hash_murmur3_one_32((uint32_t)data.width | (uint32_t)data.height << 12 | (uint32_t)data.depth << 24 | (p_semi ? 1u << 28 : 0u), c);
+		const uint32_t c2 = hash_murmur3_buffer(data.clut_semi.data(), (int)(data.clut_semi.size() * sizeof(uint16_t)), c ^ 0x9E3779B9u);
+		r_use.content = ((uint64_t)c << 32) | c2;
+		if (!textures.has(r_use.content)) {
+			TextureEntry &e = textures.insert(r_use.content, TextureEntry())->value;
+			e.data = std::move(p_data);
+			e.needs_semi_clut = p_semi;
+			e.baked = p_baked;
+		}
+	}
+
+	// Runtime conversion: the image read back from the GPU, cropped to the
+	// UVs the surface uses. nullptr when the image cannot be read.
+	TextureUse *_converted_texture_use(RendererRD::TextureStorage *ts, const PSXMaterialInfo &p_mat, const SourceSurface &p_src, PSXSceneStats &r_stats) {
 		const Ref<Image> image = _source_image(ts, p_mat.texture);
 		if (image.is_null()) {
 			return nullptr;
@@ -963,35 +1028,10 @@ private:
 					use->uv_scale[a] = (real_t)size[a] / extent[a];
 					use->uv_offset[a] = -(real_t)start[a] / extent[a];
 				}
-				// Identical texels and palettes share one copy.
-				uint32_t c = hash_murmur3_buffer(data.texels.data(), (int)(data.texels.size() * sizeof(uint16_t)));
-				c = hash_murmur3_buffer(data.clut.data(), (int)(data.clut.size() * sizeof(uint16_t)), c);
-				c = hash_murmur3_one_32((uint32_t)data.width | (uint32_t)data.height << 12 | (uint32_t)data.depth << 24 | (p_mat.semi ? 1u << 28 : 0u), c);
-				const uint32_t c2 = hash_murmur3_buffer(data.clut_semi.data(), (int)(data.clut_semi.size() * sizeof(uint16_t)), c ^ 0x9E3779B9u);
-				use->content = ((uint64_t)c << 32) | c2;
-				if (!textures.has(use->content)) {
-					TextureEntry &e = textures.insert(use->content, TextureEntry())->value;
-					e.data = std::move(data);
-					e.needs_semi_clut = p_mat.semi;
-				}
+				_store_texture(*use, std::move(data), p_mat.semi, false);
 			}
 		}
-		use->last_used = frame;
-		if (!use->valid) {
-			return nullptr;
-		}
-		TextureEntry *e = textures.getptr(use->content);
-		if (!e) {
-			return nullptr;
-		}
-		e->last_used = frame;
-		if (!e->placed && frame >= e->retry_frame) {
-			_place_texture(*e, r_stats);
-		}
-		// Surface UVs -> crop UVs, after the material's own transform.
-		p_mat.uv_offset = p_mat.uv_offset * use->uv_scale + use->uv_offset;
-		p_mat.uv_scale = p_mat.uv_scale * use->uv_scale;
-		return e;
+		return use;
 	}
 
 	Ref<Image> _source_image(RendererRD::TextureStorage *p_storage, RID p_texture) {

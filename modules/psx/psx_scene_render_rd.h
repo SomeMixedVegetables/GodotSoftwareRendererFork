@@ -215,7 +215,7 @@ public:
 		debug.report(frame_count, raster_usec, upload_usec, (int)p_instances.size(), (int)gpu->stats.triangles);
 		const psx::DrawStats &ds = scene_stats.draw;
 		debug.report_scene(frame_count, scene_stats.instances, scene_stats.surfaces, scene_stats.conversions, ds.triangles_in, ds.culled_near, ds.culled_backface, ds.culled_offscreen, ds.culled_far);
-		debug.report_textures(frame_count, ds.textured, ds.windowed, scene_stats.textures_resident, scene_stats.texture_uploads, scene_stats.texture_fallbacks, scene_stats.texture_banks, scene_stats.vram_free_percent);
+		debug.report_textures(frame_count, ds.textured, ds.windowed, scene_stats.textures_resident, scene_stats.textures_baked, scene_stats.texture_uploads, scene_stats.texture_fallbacks, scene_stats.texture_banks, scene_stats.vram_free_percent);
 		frame_count++;
 
 		// Nearest-filtered upscale of the PSX frame to the whole render target.

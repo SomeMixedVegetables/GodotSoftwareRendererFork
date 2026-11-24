@@ -89,7 +89,16 @@ function Get-Scenes {
 	return @($all | Where-Object { $_ -notlike 'ext_*' })
 }
 
+# Scenes checked against another scene's goldens: they must draw the same
+# PS1 frame by a different route (baked textures vs runtime conversion).
+# bless leaves them alone.
+$GoldenAliases = @{ 'textured_baked' = 'textured'; 'gltf_baked' = 'gltf_runtime' }
+# How many resident textures each scene's last PSX_TEXTURES line must report
+# as baked (its override.cfg turns print_stats on).
+$ExpectBaked = @{ 'textured_baked' = 6; 'gltf_baked' = 2 }
+
 function Get-GoldenDir([string]$SceneName) {
+	if ($GoldenAliases.ContainsKey($SceneName)) { $SceneName = $GoldenAliases[$SceneName] }
 	$root = if ($SceneName -like 'ext_*') { $GoldenExternalRoot } else { $GoldenRoot }
 	return Join-Path $root $SceneName
 }
@@ -189,8 +198,16 @@ function Set-Override([bool]$Enabled, [string]$DumpDir, [string]$SceneName = '')
 }
 
 function Initialize-Project([bool]$Force = $false) {
-	if (-not $Force -and (Test-Path (Join-Path $Project '.godot'))) { return }
 	New-Item -ItemType Directory -Force $OutRoot | Out-Null
+	# The glTF test models are written by a script, never committed (model
+	# files are git-ignored); write them when missing and import them.
+	if (-not (Test-Path (Join-Path $Project 'models\psx_quads_runtime.gltf'))) {
+		$m = Invoke-Godot @('--headless', '--path', $Project, '--script', 'res://tools/make_test_models.gd') (Join-Path $OutRoot 'models.log') (Join-Path $OutRoot 'models.err')
+		Write-Result "PSX_MODELS result=$(if ($m.Code -eq 0) {'pass'} else {'fail'}) godot_exit=$($m.Code)"
+		if ($m.Code -ne 0) { throw "Writing the test models failed; see $OutRoot\models.err" }
+		$Force = $true
+	}
+	if (-not $Force -and (Test-Path (Join-Path $Project '.godot'))) { return }
 	$r = Invoke-Godot @('--headless', '--path', $Project, '--import') (Join-Path $OutRoot 'import.log') (Join-Path $OutRoot 'import.err')
 	# On 4.8 beta, --import finishes importing and then exits with an access
 	# violation from EditorNode::is_cmdline_mode (Godot editor code, not the PSX
@@ -293,10 +310,19 @@ function Invoke-Check([string]$SceneName) {
 		if (-not $c.Pass -and (Test-Path $diff)) { Write-Result "PSX_DIFF $diff" }
 		$results += $c.Pass
 	}
+	if ($ExpectBaked.ContainsKey($SceneName)) {
+		# The last frame's texture report must show the expected baked textures resident.
+		$tex = @($s.psx_lines | Where-Object { $_ -match '^PSX_TEXTURES' } | Select-Object -Last 1)
+		$baked = if ($tex.Count -and $tex[0] -match 'baked=(\d+)') { [int]$Matches[1] } else { -1 }
+		$bakedOk = $baked -eq $ExpectBaked[$SceneName]
+		Write-Result "PSX_CHECK scene=$SceneName image=baked_in_use result=$(if ($bakedOk) {'pass'} else {'fail'}) baked=$baked expected=$($ExpectBaked[$SceneName])"
+		$results += $bakedOk
+	}
 	return (-not ($results -contains $false)) -and ($s.exit_code -eq 0) -and -not $s.crashed
 }
 
 function Invoke-Bless([string]$SceneName) {
+	if ($GoldenAliases.ContainsKey($SceneName)) { Write-Result "PSX_BLESS scene=$SceneName result=skip reason=uses_goldens_of_$($GoldenAliases[$SceneName])"; return $true }
 	$s = Invoke-Run $SceneName 'on'
 	$img = Get-RunImages $s
 	if (-not (Test-Path $img.Raw) -or -not (Test-Path $img.Composite)) { Write-Result "PSX_BLESS scene=$SceneName result=fail reason=no_output"; return $false }

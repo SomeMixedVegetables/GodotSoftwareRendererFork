@@ -93,10 +93,10 @@ struct PSXDebug {
 		}
 	}
 
-	void report_textures(uint64_t p_frame, uint32_t p_textured, uint32_t p_windowed, uint32_t p_resident, uint32_t p_uploads, uint32_t p_fallbacks, uint32_t p_banks, uint32_t p_vram_free_percent) const {
+	void report_textures(uint64_t p_frame, uint32_t p_textured, uint32_t p_windowed, uint32_t p_resident, uint32_t p_baked, uint32_t p_uploads, uint32_t p_fallbacks, uint32_t p_banks, uint32_t p_vram_free_percent) const {
 		if (print_stats) {
-			print_line(vformat("PSX_TEXTURES frame=%d textured_tris=%d windowed_tris=%d resident=%d uploads=%d fallbacks=%d banks=%d vram_free=%d%%",
-					(int64_t)p_frame, p_textured, p_windowed, p_resident, p_uploads, p_fallbacks, p_banks, p_vram_free_percent));
+			print_line(vformat("PSX_TEXTURES frame=%d textured_tris=%d windowed_tris=%d resident=%d baked=%d uploads=%d fallbacks=%d banks=%d vram_free=%d%%",
+					(int64_t)p_frame, p_textured, p_windowed, p_resident, p_baked, p_uploads, p_fallbacks, p_banks, p_vram_free_percent));
 		}
 	}
 

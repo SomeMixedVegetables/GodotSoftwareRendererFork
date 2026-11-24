@@ -27,6 +27,8 @@ window frames, `-Stats`, `-Dev`, `-ModelsDir <folder>`, `-ModelsPerCategory 2`.
 | `demo` | The built-in cube (`demo.override.cfg` turns on `debug/demo_scene`) |
 | `lighting` | Sun, omni and spot lights, ambient; default, coloured, alpha, emissive, metallic, unshaded and additive materials |
 | `lighting_godot` | The same scene with `lighting_mode` = Godot Match |
+| `gltf_runtime` | `models/psx_quads_runtime.gltf`: three quads with embedded textures (opaque, alpha-scissor at 0.3, checker), converted when drawn |
+| `gltf_baked` | The same model imported with `psx/bake_textures` on (checker set to Never). Checked against `gltf_runtime`'s goldens and must report exactly 2 baked textures |
 | `fog_multimesh` | Depth fog, sky fog, a MultiMesh grid and a large subdivided ground |
 | `ortho` | An orthographic camera |
 | `skinned` | A two-bone mesh built in code, bent every frame (CPU skinning) |
@@ -34,6 +36,7 @@ window frames, `-Stats`, `-Dev`, `-ModelsDir <folder>`, `-ModelsPerCategory 2`.
 | `shaders` | ShaderMaterial: colour and texture uniforms, unshaded, alpha, vertex displacement, computed colour |
 | `split` | Two SubViewports on one world (split screen) and a third with its own world |
 | `textured` | Procedural textures: repeating floor, a 256 x 256 wall split along tile edges, alpha scissor, alpha blend, a clamped decal, unshaded, fog and an omni light |
+| `textured_baked` | `textured` with every texture baked by `PSXTexture.bake` (what the PSX Texture importer does). Checked against `textured`'s goldens: baking must not change a pixel. Also fails unless `PSX_TEXTURES` reports baked textures in use |
 | `ext_models` | Third-party models from `-ModelsDir` (see below) |
 
 `<scene>.override.cfg` next to a scene adds `[rendering]` settings for that
@@ -70,7 +73,7 @@ Frame N of the raw dumps and frame N of the movie are the same moment.
 GTE lighting (NCS/NCCS/NCDS/DPCS), mesh conversion, subdivision, alpha
 classes, `draw_mesh` (culling, near/far, lighting modes, emission, fog,
 point lights), texture conversion (resampling, 4/8-bit palettes, alpha),
-the VRAM allocator, textured meshes (tile shift, texture window, texture
+baked textures (round trip, refusing bad data, decoding), the VRAM allocator, textured meshes (tile shift, texture window, texture
 banks, the fog pass), coverage and fill rule, size limits and scaled VRAM, dither, blend modes,
 modulation, transparency, CLUTs, texture window, mask bit, fills and copies,
 lines, the ordering table, frame layout and the demo. It also saves demo
@@ -111,7 +114,7 @@ work in any project:
 
 ## Texture memory
 
-Textures are converted when first drawn: scaled to a power of two, reduced to
+Textures are converted when first drawn (or at import, see Baked textures): scaled to a power of two, reduced to
 a 4- or 8-bit palette (CLUT) and packed into VRAM next to the framebuffers.
 Only the part of a texture a mesh's UVs use is kept, and identical textures
 are stored once. When VRAM is full, the least recently used texture not drawn
@@ -125,7 +128,43 @@ uploads use. Drawing always goes to VRAM. A bank holds the same layout rules
 as VRAM, so a game that fits in 1 bank also fits on the hardware.
 
 `PSX_TEXTURES` lines (with `print_stats`) report textured and windowed
-triangles, textures resident, uploads, fallbacks, banks in use and free VRAM.
+triangles, textures resident (and how many of them were baked), uploads,
+fallbacks, banks in use and free VRAM.
+
+## Baked textures (PSX Texture importer)
+
+Select an image in the FileSystem dock, set Import As to PSX Texture in the
+Import dock and reimport. The texture is converted once, at import, and
+saved as a `PSXTexture`: an ordinary texture to Godot, with the PS1 texels
+and palettes alongside. The PSX renderer uses those directly, with no GPU
+readback or conversion when the texture is first drawn.
+
+| Option | Effect |
+| --- | --- |
+| `psx/max_size` | Largest side; Project Setting uses `rendering/psx/textures/max_size` |
+| `psx/depth` | Auto, 4-bit, 8-bit or 15-bit; Project Setting uses `rendering/psx/textures/depth` |
+| `psx/max_colors` | Palette limit (0 = the depth's); -1 uses `rendering/psx/textures/max_colors` |
+| `alpha/cut_threshold` | The alpha scissor threshold the cut-out version is made for |
+| `preview/ps1_look` | Godot (editor, other renderers) shows the PS1 result instead of the source image |
+
+**Models (glTF, .blend, FBX ...).** Select the model, turn on **Psx > Bake
+Textures** in the Import dock and reimport: every material's albedo texture
+is baked as the scene imports, embedded or extracted, as a copy saved in the
+imported scene. The dock's other Psx options are the image importer's; in
+Advanced Import Settings each material has **Psx > Bake** (Scene Setting,
+Always, Never) and its own size, depth and colour overrides. Cut-outs are
+baked at the material's own alpha scissor threshold. An extracted image that
+is itself imported as PSX Texture is left linked, with its own settings; any
+other extracted image that changes later needs the model reimported.
+`models/psx_quads_*.gltf` are written by `tools/make_test_models.gd` when missing (procedural textures,
+no third-party content).
+
+Images with alpha are baked three times: opaque, cut-out and blended, so any
+material can use them. A material whose alpha scissor threshold differs from
+`alpha/cut_threshold` (by more than 1/512) converts the texture when drawn,
+as before, from the texture's image (the preview, when it is on). Scripts can
+bake too: `PSXTexture.bake(image, max_size, depth, max_colors, alpha_cut,
+preview)`.
 
 ## Limits
 
@@ -187,6 +226,9 @@ triangles, textures resident, uploads, fallbacks, banks in use and free VRAM.
   albedo colour and texture (StandardMaterial3D's `albedo` and
   `texture_albedo` when present). Vertex displacement and colours computed
   in code are not drawn.
+- Baked textures are used whole. Runtime conversion keeps only the part of a
+  texture a mesh's UVs use (so a small crop gets more texels and its own
+  palette); a baked texture keeps the palette it was imported with.
 - Every viewport (split screen, SubViewports) shares one PS1 GPU and one
   texture memory; each is drawn at the PSX resolution and stretched to its
   own size.

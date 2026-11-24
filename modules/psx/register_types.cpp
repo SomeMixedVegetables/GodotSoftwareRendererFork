@@ -1,13 +1,33 @@
 #include "register_types.h"
 
 #include "psx_debug.h"
+#include "psx_texture_resource.h"
 
 #include "core/config/engine.h"
 #include "core/config/project_settings.h"
+#include "core/io/resource_importer.h"
+#include "core/object/class_db.h"
 #include "servers/rendering/renderer_compositor.h"
 
 #ifdef RD_ENABLED
 #include "psx_compositor_rd.h"
+#endif
+
+#ifdef TOOLS_ENABLED
+#include "psx_scene_import_plugin.h"
+#include "resource_importer_psx_texture.h"
+
+#include "editor/editor_node.h"
+
+static void psx_editor_init() {
+	Ref<ResourceImporterPSXTexture> importer;
+	importer.instantiate();
+	ResourceFormatImporter::get_singleton()->add_importer(importer);
+
+	Ref<PSXSceneImportPlugin> scene_plugin;
+	scene_plugin.instantiate();
+	ResourceImporterScene::add_post_importer_plugin(scene_plugin);
+}
 #endif
 
 static RendererCompositor *psx_create_compositor(RendererCompositor *(*p_default)()) {
@@ -26,6 +46,16 @@ static RendererCompositor *psx_create_compositor(RendererCompositor *(*p_default
 }
 
 void initialize_psx_module(ModuleInitializationLevel p_level) {
+	if (p_level == MODULE_INITIALIZATION_LEVEL_SCENE) {
+		GDREGISTER_CLASS(PSXTexture);
+	}
+#ifdef TOOLS_ENABLED
+	if (p_level == MODULE_INITIALIZATION_LEVEL_EDITOR) {
+		GDREGISTER_CLASS(ResourceImporterPSXTexture);
+		GDREGISTER_INTERNAL_CLASS(PSXSceneImportPlugin);
+		EditorNode::add_init_callback(psx_editor_init);
+	}
+#endif
 	if (p_level != MODULE_INITIALIZATION_LEVEL_SERVERS) {
 		return;
 	}

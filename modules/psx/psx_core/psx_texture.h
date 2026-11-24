@@ -71,6 +71,25 @@ struct TextureData {
 // Returns false (r_texture empty) for an empty image.
 bool convert_texture(const uint8_t *p_rgba, int32_t p_width, int32_t p_height, const TextureOptions &p_options, TextureData &r_texture);
 
+// A texture converted ahead of time (the PSX Texture importer) for one way
+// a material can use its alpha.
+struct BakedTexture {
+	uint8_t alpha_mode = ALPHA_IGNORE;
+	float alpha_cut = 0.5f; // ALPHA_CUT only
+	TextureData data;
+};
+
+// Appends p_textures to r_bytes in a little-endian format of its own
+// ("PSXT", version). read_baked_textures returns false (r_textures empty)
+// for anything it does not recognise or that is cut short.
+void write_baked_textures(const std::vector<BakedTexture> &p_textures, std::vector<uint8_t> &r_bytes);
+bool read_baked_textures(const uint8_t *p_bytes, size_t p_size, std::vector<BakedTexture> &r_textures);
+
+// What the GPU would show for each texel, as RGBA8 (width x height): 15-bit
+// colour widened to 8 bits; alpha 0 for transparent texels, 128 for STP
+// ones when p_semi_alpha, else 255. For previews and tests.
+void decode_texture(const TextureData &p_texture, bool p_semi_alpha, std::vector<uint8_t> &r_rgba);
+
 // CPU->VRAM copy (GP0 A0h) of a p_width x p_height rectangle of halfwords,
 // into texture bank p_bank (0 = VRAM).
 void upload_rect(GPU &p_gpu, int32_t p_x, int32_t p_y, int32_t p_width, int32_t p_height, const uint16_t *p_data, uint16_t p_bank = 0);

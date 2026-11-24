@@ -336,6 +336,176 @@ bool convert_texture(const uint8_t *p_rgba, int32_t p_width, int32_t p_height, c
 	return true;
 }
 
+namespace {
+
+constexpr uint32_t BAKED_MAGIC = 0x54585350u; // "PSXT"
+constexpr uint32_t BAKED_VERSION = 1;
+
+struct ByteWriter {
+	std::vector<uint8_t> &out;
+	void u8(uint8_t p_v) { out.push_back(p_v); }
+	void u32(uint32_t p_v) {
+		for (int i = 0; i < 4; i++) {
+			out.push_back((uint8_t)(p_v >> (i * 8)));
+		}
+	}
+	void f32(float p_v) {
+		uint32_t bits;
+		std::memcpy(&bits, &p_v, 4);
+		u32(bits);
+	}
+	void halfwords(const std::vector<uint16_t> &p_v) {
+		u32((uint32_t)p_v.size());
+		for (uint16_t h : p_v) {
+			out.push_back((uint8_t)h);
+			out.push_back((uint8_t)(h >> 8));
+		}
+	}
+};
+
+struct ByteReader {
+	const uint8_t *data;
+	size_t size;
+	size_t pos = 0;
+	bool ok = true;
+	bool need(size_t p_n) {
+		ok = ok && pos + p_n <= size;
+		return ok;
+	}
+	uint8_t u8() { return need(1) ? data[pos++] : 0; }
+	uint32_t u32() {
+		if (!need(4)) {
+			return 0;
+		}
+		const uint32_t v = (uint32_t)data[pos] | (uint32_t)data[pos + 1] << 8 | (uint32_t)data[pos + 2] << 16 | (uint32_t)data[pos + 3] << 24;
+		pos += 4;
+		return v;
+	}
+	float f32() {
+		const uint32_t bits = u32();
+		float v;
+		std::memcpy(&v, &bits, 4);
+		return v;
+	}
+	void halfwords(std::vector<uint16_t> &r_v, size_t p_max) {
+		const uint32_t n = u32();
+		if (n > p_max || !need((size_t)n * 2)) {
+			ok = false;
+			return;
+		}
+		r_v.resize(n);
+		for (uint32_t i = 0; i < n; i++) {
+			r_v[i] = (uint16_t)(data[pos] | data[pos + 1] << 8);
+			pos += 2;
+		}
+	}
+};
+
+} // namespace
+
+void write_baked_textures(const std::vector<BakedTexture> &p_textures, std::vector<uint8_t> &r_bytes) {
+	ByteWriter w{ r_bytes };
+	w.u32(BAKED_MAGIC);
+	w.u32(BAKED_VERSION);
+	w.u32((uint32_t)p_textures.size());
+	for (const BakedTexture &b : p_textures) {
+		const TextureData &t = b.data;
+		w.u8(b.alpha_mode);
+		w.f32(b.alpha_cut);
+		w.u32((uint32_t)t.width);
+		w.u32((uint32_t)t.height);
+		w.u8(t.depth);
+		w.u8((t.has_transparent ? 1 : 0) | (t.has_semi ? 2 : 0));
+		w.u8(t.mean[0]);
+		w.u8(t.mean[1]);
+		w.u8(t.mean[2]);
+		w.u32((uint32_t)t.colors);
+		w.halfwords(t.clut);
+		w.halfwords(t.clut_semi);
+		w.halfwords(t.clut_white);
+		w.halfwords(t.texels);
+	}
+}
+
+bool read_baked_textures(const uint8_t *p_bytes, size_t p_size, std::vector<BakedTexture> &r_textures) {
+	r_textures.clear();
+	if (!p_bytes) {
+		return false;
+	}
+	ByteReader r{ p_bytes, p_size };
+	if (r.u32() != BAKED_MAGIC || r.u32() != BAKED_VERSION) {
+		return false;
+	}
+	const uint32_t count = r.u32();
+	if (!r.ok || count > 16) {
+		return false;
+	}
+	for (uint32_t i = 0; i < count && r.ok; i++) {
+		BakedTexture b;
+		TextureData &t = b.data;
+		b.alpha_mode = r.u8();
+		b.alpha_cut = r.f32();
+		t.width = (int32_t)r.u32();
+		t.height = (int32_t)r.u32();
+		t.depth = r.u8();
+		const uint8_t flags = r.u8();
+		t.has_transparent = (flags & 1) != 0;
+		t.has_semi = (flags & 2) != 0;
+		t.mean[0] = r.u8();
+		t.mean[1] = r.u8();
+		t.mean[2] = r.u8();
+		t.colors = (int32_t)r.u32();
+		r.halfwords(t.clut, 256);
+		r.halfwords(t.clut_semi, 256);
+		r.halfwords(t.clut_white, 256);
+		r.halfwords(t.texels, 256 * 256);
+		// The texture must be one convert_texture could have made.
+		const bool size_ok = t.width >= 8 && t.width <= 256 && t.height >= 8 && t.height <= 256 && (t.width & (t.width - 1)) == 0 && (t.height & (t.height - 1)) == 0;
+		const bool depth_ok = t.depth == TEXTURE_4BIT || t.depth == TEXTURE_8BIT || t.depth == TEXTURE_15BIT;
+		if (!r.ok || !size_ok || !depth_ok || b.alpha_mode > ALPHA_BLEND || t.texels.size() != (size_t)t.hw_width() * t.height || t.clut.size() != (size_t)t.clut_entries() || (!t.clut_semi.empty() && t.clut_semi.size() != t.clut.size()) || (!t.clut_white.empty() && t.clut_white.size() != t.clut.size())) {
+			r_textures.clear();
+			return false;
+		}
+		r_textures.push_back(std::move(b));
+	}
+	if (!r.ok) {
+		r_textures.clear();
+		return false;
+	}
+	return true;
+}
+
+void decode_texture(const TextureData &p_texture, bool p_semi_alpha, std::vector<uint8_t> &r_rgba) {
+	const TextureData &t = p_texture;
+	r_rgba.assign((size_t)t.width * t.height * 4, 0);
+	if (t.texels.size() != (size_t)t.hw_width() * t.height) {
+		return;
+	}
+	const int32_t per_hw = t.depth == TEXTURE_4BIT ? 4 : (t.depth == TEXTURE_8BIT ? 2 : 1);
+	const int32_t bits = 16 / per_hw;
+	const uint32_t mask = per_hw == 1 ? 0xFFFFu : (1u << bits) - 1;
+	for (int32_t y = 0; y < t.height; y++) {
+		for (int32_t x = 0; x < t.width; x++) {
+			const uint16_t hw = t.texels[(size_t)y * t.hw_width() + x / per_hw];
+			uint16_t c = hw;
+			if (per_hw > 1) {
+				const uint32_t index = (hw >> ((x % per_hw) * bits)) & mask;
+				c = index < t.clut.size() ? t.clut[index] : 0;
+			}
+			uint8_t *px = &r_rgba[((size_t)y * t.width + x) * 4];
+			if (c == 0) {
+				continue; // Transparent
+			}
+			for (int ch = 0; ch < 3; ch++) {
+				const uint32_t v = (c >> (ch * 5)) & 31;
+				px[ch] = (uint8_t)((v << 3) | (v >> 2));
+			}
+			// Without semi texels, STP only marks opaque black (8000h).
+			px[3] = (p_semi_alpha && t.has_semi && (c & 0x8000)) ? 128 : 255;
+		}
+	}
+}
+
 void upload_rect(GPU &p_gpu, int32_t p_x, int32_t p_y, int32_t p_width, int32_t p_height, const uint16_t *p_data, uint16_t p_bank) {
 	if (p_width <= 0 || p_height <= 0) {
 		return;
