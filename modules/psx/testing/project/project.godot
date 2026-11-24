@@ -1,0 +1,18 @@
+; PSX test project, driven by modules/psx/testing/psx_test.ps1.
+; rendering/psx/* settings are written per run into override.cfg.
+config_version=5
+
+[application]
+
+config/name="PSX Test Project"
+run/main_scene="res://scenes/basic.tscn"
+
+[display]
+
+window/size/viewport_width=960
+window/size/viewport_height=720
+window/size/resizable=false
+
+[rendering]
+
+renderer/rendering_method="forward_plus"

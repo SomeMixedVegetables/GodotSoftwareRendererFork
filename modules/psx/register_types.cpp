@@ -1,5 +1,7 @@
 #include "register_types.h"
 
+#include "psx_debug.h"
+
 #include "core/config/engine.h"
 #include "core/config/project_settings.h"
 #include "servers/rendering/renderer_compositor.h"
@@ -28,6 +30,7 @@ void initialize_psx_module(ModuleInitializationLevel p_level) {
 		return;
 	}
 	GLOBAL_DEF_RST_BASIC("rendering/psx/enabled", false);
+	PSXDebug::define_settings();
 	RendererCompositor::create_override = psx_create_compositor;
 }
 

@@ -13,6 +13,7 @@
 #ifdef RD_ENABLED
 
 #include "psx_core/psx_raster.h"
+#include "psx_debug.h"
 
 #include "core/math/math_funcs.h"
 #include "core/templates/local_vector.h"
@@ -29,6 +30,7 @@ class PSXSceneRenderRD : public Base {
 	LocalVector<uint32_t> frame_pixels;
 	RID frame_texture;
 	uint64_t frame_count = 0;
+	PSXDebug debug;
 
 	void _ensure_frame_texture() {
 		if (frame_texture.is_valid()) {
@@ -87,14 +89,24 @@ public:
 		ERR_FAIL_COND(!framebuffer.is_valid());
 		const Size2i target_size = texture_storage->render_target_get_size(render_target);
 
+		const uint64_t raster_begin = OS::get_singleton()->get_ticks_usec();
 		_rasterize_test_frame();
-		frame_count++;
+		const uint64_t raster_usec = OS::get_singleton()->get_ticks_usec() - raster_begin;
 
+		if (debug.wants_dump(frame_count)) {
+			debug.dump(frame_count, frame_pixels.ptr(), FRAME_WIDTH, FRAME_HEIGHT);
+		}
+
+		const uint64_t upload_begin = OS::get_singleton()->get_ticks_usec();
 		_ensure_frame_texture();
 		Vector<uint8_t> bytes;
 		bytes.resize(frame_pixels.size() * sizeof(uint32_t));
 		memcpy(bytes.ptrw(), frame_pixels.ptr(), bytes.size());
 		RD::get_singleton()->texture_update(frame_texture, 0, bytes);
+		const uint64_t upload_usec = OS::get_singleton()->get_ticks_usec() - upload_begin;
+
+		debug.report(frame_count, raster_usec, upload_usec, (int)p_instances.size(), 1);
+		frame_count++;
 
 		// Nearest-filtered upscale of the 320x240 frame to the whole render target.
 		this->copy_effects->copy_to_fb_rect(frame_texture, framebuffer, Rect2i(Point2i(), target_size),
@@ -105,7 +117,9 @@ public:
 		texture_storage->render_target_disable_clear_request(render_target);
 	}
 
-	PSXSceneRenderRD() {}
+	PSXSceneRenderRD() {
+		debug.load();
+	}
 
 	~PSXSceneRenderRD() {
 		if (frame_texture.is_valid()) {
