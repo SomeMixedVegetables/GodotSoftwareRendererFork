@@ -164,6 +164,12 @@ public:
 	}
 
 	static RendererCompositorRD *get_singleton() { return singleton; }
+
+	// Optional hook for modules that supply their own scene renderer, usually a
+	// subclass of RenderForwardClustered or RenderForwardMobile. Called from the
+	// constructor with p_mobile telling which one Godot would pick; return
+	// nullptr to keep Godot's choice.
+	static RendererSceneRenderRD *(*scene_create_override)(bool p_mobile);
 	RendererCompositorRD();
 	~RendererCompositorRD();
 };

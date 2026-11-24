@@ -38,9 +38,13 @@
 RendererCompositor *RendererCompositor::singleton = nullptr;
 
 RendererCompositor *(*RendererCompositor::_create_func)() = nullptr;
+RendererCompositor *(*RendererCompositor::create_override)(RendererCompositor *(*p_default)()) = nullptr;
 bool RendererCompositor::low_end = false;
 
 RendererCompositor *RendererCompositor::create() {
+	if (create_override) {
+		return create_override(_create_func);
+	}
 	return _create_func();
 }
 
