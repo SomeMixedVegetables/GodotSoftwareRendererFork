@@ -650,6 +650,13 @@ RID MeshStorage::mesh_surface_get_index_buffer_rd_rid(RID p_mesh, int p_surface)
 	return mesh->surfaces[p_surface]->index_buffer;
 }
 
+RID MeshStorage::mesh_surface_get_blend_shape_buffer_rd_rid(RID p_mesh, int p_surface) const {
+	Mesh *mesh = mesh_owner.get_or_null(p_mesh);
+	ERR_FAIL_NULL_V(mesh, RID());
+	ERR_FAIL_UNSIGNED_INDEX_V((uint32_t)p_surface, mesh->surface_count, RID());
+	return mesh->surfaces[p_surface]->blend_shape_buffer;
+}
+
 void MeshStorage::mesh_surface_set_material(RID p_mesh, int p_surface, RID p_material) {
 	Mesh *mesh = mesh_owner.get_or_null(p_mesh);
 	ERR_FAIL_NULL(mesh);

@@ -397,6 +397,9 @@ public:
 	virtual RID mesh_surface_get_attribute_buffer_rd_rid(RID p_mesh, int p_surface) const override;
 	virtual RID mesh_surface_get_skin_buffer_rd_rid(RID p_mesh, int p_surface) const override;
 	virtual RID mesh_surface_get_index_buffer_rd_rid(RID p_mesh, int p_surface) const override;
+	// The buffer mesh_get_surface reads blend_shape_data from (PSX module,
+	// to read it with other buffers in one wait for the GPU).
+	RID mesh_surface_get_blend_shape_buffer_rd_rid(RID p_mesh, int p_surface) const;
 
 	virtual int mesh_get_surface_count(RID p_mesh) const override;
 

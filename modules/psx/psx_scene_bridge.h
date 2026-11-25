@@ -1322,9 +1322,8 @@ private:
 	// the PS1 never uses), so the buffers are queued as asynchronous reads
 	// and one synchronous read waits once for all of them. Batches stay
 	// well inside the download staging space, beyond which RenderingDevice
-	// would flush part way through a read. Meshes with blend shapes (whose
-	// buffer is not exposed) and anything a batch could not take are read
-	// the slow way.
+	// would flush part way through a read. Blend shapes are one more buffer
+	// of the surface; anything a batch could not take is read the slow way.
 	void _fetch_surfaces(RendererRD::MeshStorage *p_storage, const LocalVector<RID> &p_meshes) {
 		RD *rd = RD::get_singleton();
 		const RendererRD::MeshStorage *reader = p_storage; // The const mesh_get_surface reads back
@@ -1333,7 +1332,7 @@ private:
 		struct Part {
 			RID mesh;
 			uint32_t surface = 0;
-			int which = 0; // 0 vertex, 1 attribute, 2 skin, 3 index
+			int which = 0; // 0 vertex, 1 attribute, 2 skin, 3 index, 4 blend shapes
 			RID buffer;
 			std::shared_ptr<PSXDownload> slot;
 		};
@@ -1367,6 +1366,9 @@ private:
 					case 2:
 						sd.skin_data = part.slot->data;
 						break;
+					case 4:
+						sd.blend_shape_data = part.slot->data;
+						break;
 					default:
 						sd.index_data = part.slot->data;
 						break;
@@ -1380,7 +1382,7 @@ private:
 			const int count = p_storage->mesh_get_surface_count(mesh);
 			LocalVector<RenderingServerTypes::SurfaceData> &out = fetched.insert(mesh, LocalVector<RenderingServerTypes::SurfaceData>())->value;
 			out.resize(count);
-			const bool shapes = p_storage->mesh_get_blend_shape_count(mesh) > 0;
+			const uint64_t shapes = (uint64_t)MAX(0, p_storage->mesh_get_blend_shape_count(mesh));
 			for (int i = 0; i < count; i++) {
 				void *surface = p_storage->mesh_get_surface(mesh, (uint32_t)i);
 				if (!surface) {
@@ -1392,23 +1394,25 @@ private:
 				sd.primitive = p_storage->mesh_surface_get_primitive(surface);
 				sd.aabb = p_storage->mesh_surface_get_aabb(surface);
 				sd.uv_scale = p_storage->mesh_surface_get_uv_scale(surface);
-				const RID buffers[4] = {
+				const RID buffers[5] = {
 					p_storage->mesh_surface_get_vertex_buffer_rd_rid(mesh, i),
 					p_storage->mesh_surface_get_attribute_buffer_rd_rid(mesh, i),
 					p_storage->mesh_surface_get_skin_buffer_rd_rid(mesh, i),
 					p_storage->mesh_surface_get_index_buffer_rd_rid(mesh, i),
+					shapes > 0 ? p_storage->mesh_surface_get_blend_shape_buffer_rd_rid(mesh, i) : RID(),
 				};
 				sd.index_count = buffers[3].is_valid() ? p_storage->mesh_surface_get_vertices_drawn_count(surface) : 0;
-				// Generous: no vertex format takes 256 bytes.
-				const uint64_t estimate = (uint64_t)sd.vertex_count * 256 + (uint64_t)sd.index_count * 4 + 64;
-				if (shapes || estimate > budget || !buffers[0].is_valid()) {
+				// Generous: no vertex format takes 256 bytes, nor a blend shape
+				// 64 bytes a vertex.
+				const uint64_t estimate = (uint64_t)sd.vertex_count * (256 + shapes * 64) + (uint64_t)sd.index_count * 4 + 64;
+				if (estimate > budget || !buffers[0].is_valid()) {
 					out[i] = reader->mesh_get_surface(mesh, i);
 					continue;
 				}
 				if (batch_bytes + estimate > budget) {
 					finish();
 				}
-				for (int w = 0; w < 4; w++) {
+				for (int w = 0; w < 5; w++) {
 					if (!buffers[w].is_valid()) {
 						continue;
 					}

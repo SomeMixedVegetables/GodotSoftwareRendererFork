@@ -336,8 +336,7 @@ preview)`.
 - A mesh is read back from Godot the first frame it is drawn (and again
   only when its surfaces change). All the meshes new in a frame are read in
   one batch, which waits for the GPU once (about 5 ms for the 22 meshes of
-  `ext_models`); meshes with blend shapes are read one buffer at a time,
-  which waits for each. Textures are read back (in one batch too) and
+  `ext_models`), blend shapes included. Textures are read back (in one batch too) and
   converted the first time they are used: about 12 ms for the 103 textures
   of `ext_models`, and up to about 1.5 ms for one 256 x 256 photo-like
   texture. `PSXTexture` resources baked at import skip that.
