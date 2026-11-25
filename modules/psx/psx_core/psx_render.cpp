@@ -21,6 +21,8 @@ void DrawStats::add(const DrawStats &p_other) {
 	windowed += p_other.windowed;
 	fog_passes += p_other.fog_passes;
 	banked += p_other.banked;
+	lines += p_other.lines;
+	points += p_other.points;
 	arena_full += p_other.arena_full;
 }
 
@@ -162,11 +164,348 @@ static uint8_t to_modulation(uint8_t p_value) {
 	return (uint8_t)((p_value * 128 + 127) / 255);
 }
 
+// What shade_vertex needs to know about a mesh and its material.
+struct ShadeContext {
+	bool lit = false; // Lighting on and the mesh has normals
+	bool linear = false; // LIGHTING_LINEAR
+	bool emissive = false;
+	bool textured = false; // Colours modulate a texel (128 = 1.0)
+	uint32_t emission_linear[3] = { 0, 0, 0 };
+	uint8_t emission[3] = { 0, 0, 0 }; // As drawn, or as modulation when textured
+	const LinearTables *lt = nullptr;
+};
+
+static ShadeContext make_shade_context(const DrawParams &p_params, bool p_has_normals, bool p_textured) {
+	ShadeContext s;
+	s.lit = p_params.lit && p_has_normals;
+	s.linear = p_params.lighting == LIGHTING_LINEAR;
+	s.emissive = p_params.emission[0] | p_params.emission[1] | p_params.emission[2];
+	s.textured = p_textured;
+	s.lt = &linear_tables();
+	for (int c = 0; c < 3; c++) {
+		s.emission_linear[c] = s.lt->to_linear[p_params.emission[c]];
+		s.emission[c] = p_textured ? to_modulation(p_params.emission[c]) : p_params.emission[c];
+	}
+	return s;
+}
+
+// A vertex's drawn (or modulation) colour from its baked colour: lighting in
+// the chosen mode, emission, then fog by its SZ. r_fog is the fog amount
+// (IR0, 4096 = full), 0 without fog.
+static void shade_vertex(GTE &p_gte, const DrawParams &p_params, const ShadeContext &p_s, const SVector &p_pos, const SVector &p_normal, const uint8_t p_color[3], uint16_t p_sz, uint8_t r_out[3], int16_t &r_fog) {
+	const LinearTables &lt = *p_s.lt;
+	const bool tex = p_s.textured, lit = p_s.lit, linear = p_s.linear;
+	const uint8_t *c = p_color;
+	const uint8_t base[3] = { tex ? to_modulation(c[0]) : c[0], tex ? to_modulation(c[1]) : c[1], tex ? to_modulation(c[2]) : c[2] };
+	uint8_t *out = r_out;
+	out[0] = base[0];
+	out[1] = base[1];
+	out[2] = base[2];
+	// Linear 12-bit (1.0 = 4096) back to a drawn or modulation colour.
+	auto from_linear = [&](uint64_t p_v) -> uint8_t {
+		return tex ? lt.to_mod[p_v > 8192 ? 8192 : p_v] : lt.to_srgb[p_v > 4096 ? 4096 : p_v];
+	};
+	if (lit && p_params.point_light_count > 0) {
+		// Directional + ambient from the GTE (NCS), point lights from the
+		// CPU, then the colour maths of the chosen mode.
+		p_gte.v[0] = p_normal;
+		p_gte.ncs();
+		int32_t level[3];
+		point_light_level(p_params, p_pos, p_normal, level);
+		for (int ch = 0; ch < 3; ch++) {
+			int32_t l = p_gte.ir[ch + 1] + level[ch];
+			l = l > 0x7FFF ? 0x7FFF : l;
+			if (linear) {
+				uint64_t v = ((uint64_t)lt.to_linear[c[ch]] * (uint32_t)l) >> 12;
+				v += p_s.emission_linear[ch];
+				out[ch] = from_linear(v >> 4);
+			} else {
+				const int32_t v = (base[ch] * l) >> 12;
+				out[ch] = (uint8_t)(v > 255 ? 255 : v);
+			}
+		}
+	} else if (lit && !linear) {
+		// PS1: the display colour times the light, on the GTE.
+		p_gte.v[0] = p_normal;
+		p_gte.rgbc.r = base[0];
+		p_gte.rgbc.g = base[1];
+		p_gte.rgbc.b = base[2];
+		p_gte.nccs();
+		out[0] = p_gte.rgb[2].r;
+		out[1] = p_gte.rgb[2].g;
+		out[2] = p_gte.rgb[2].b;
+	} else if (lit) {
+		// Godot match: the light level from the GTE, applied to the linear
+		// colour, plus linear emission, back to sRGB.
+		p_gte.v[0] = p_normal;
+		p_gte.ncs();
+		for (int ch = 0; ch < 3; ch++) {
+			uint64_t v = ((uint64_t)lt.to_linear[c[ch]] * (uint16_t)p_gte.ir[ch + 1]) >> 12;
+			v += p_s.emission_linear[ch];
+			out[ch] = from_linear(v >> 4); // 16-bit to 12-bit linear
+		}
+	}
+	if (p_s.emissive && !(lit && linear)) {
+		for (int ch = 0; ch < 3; ch++) {
+			out[ch] = add_saturate(out[ch], p_s.emission[ch]);
+		}
+	}
+	r_fog = 0;
+	if (p_params.fog) {
+		// Depth cue toward FC by this vertex's own IR0.
+		p_gte.rgbc.r = out[0];
+		p_gte.rgbc.g = out[1];
+		p_gte.rgbc.b = out[2];
+		p_gte.ir[0] = depth_cue(p_gte, p_sz);
+		r_fog = p_gte.ir[0];
+		p_gte.dpcs();
+		out[0] = p_gte.rgb[2].r;
+		out[1] = p_gte.rgb[2].g;
+		out[2] = p_gte.rgb[2].b;
+	}
+}
+
+// Lines (GP0 40h/50h, one pixel wide) and points (a tile of point_size
+// pixels): untextured, lit and fogged per vertex like triangles. A line
+// crossing the near plane is cut there; one too long for the GPU (it
+// refuses lines of 1024 x 512 or more) is split in half, NEAR_SPLIT_DEPTH
+// times at most. Lines sort by the mean of their two depths.
+static void draw_lines_points(GTE &p_gte, PacketBuilder &p_builder, OrderingTable &p_ot, const MeshData &p_mesh, const DrawParams &p_params, DrawStats &r_stats) {
+	const bool lines = p_mesh.primitive == MESH_LINES;
+	const uint32_t per = lines ? 2 : 1;
+	const uint32_t count = (uint32_t)(p_mesh.indices.size() / per);
+	const bool has_normals = !p_mesh.normals.empty();
+	const ShadeContext shade = make_shade_context(p_params, has_normals, false);
+	const bool tinted = (p_params.tint[0] & p_params.tint[1] & p_params.tint[2]) != 255;
+	// The PS1's one alpha level: the material's alpha decides for an
+	// alpha-mix material; other blend modes blend everything.
+	bool semi = p_params.semi;
+	if (semi && p_params.blend == BLEND_HALF && !p_params.semi_whole) {
+		if (p_mesh.alpha <= 0.25f) {
+			r_stats.culled_alpha += count;
+			return;
+		}
+		semi = p_mesh.alpha < 0.75f;
+	}
+	const uint32_t mode_word = 0xE1000000u | GP0Encoder::texpage(0, 0, 0, p_params.blend, p_params.dither);
+	const bool own_dither = p_params.dither != p_params.frame_dither;
+	const uint32_t restore_mode_word = 0xE1000000u | GP0Encoder::texpage(0, 0, 0, BLEND_HALF, p_params.frame_dither);
+	const int32_t point_size = std::max(1, p_params.point_size);
+	const int32_t max_w = 1024 * p_gte.scale, max_h = 512 * p_gte.scale;
+	const int64_t near_limit = p_params.ortho ? p_params.near_z : (int64_t)p_gte.h / 2 + 1;
+	const int64_t clip_z = near_limit + 1;
+
+	struct End {
+		SVector pos;
+		SVector normal;
+		uint8_t color[3];
+	};
+	struct Segment {
+		End e[2];
+		int depth;
+	};
+	auto view_z = [&](const SVector &p_pos) -> int64_t {
+		const Matrix &r = p_gte.rotation;
+		return (int64_t)p_gte.translation.z + (((int64_t)r.m[2][0] * p_pos.x + (int64_t)r.m[2][1] * p_pos.y + (int64_t)r.m[2][2] * p_pos.z) >> 12);
+	};
+	auto mix_end = [&](const End &p_a, const End &p_b, double p_t) {
+		End m;
+		auto mix = [&](double p_x, double p_y) { return p_x + (p_y - p_x) * p_t; };
+		m.pos.x = (int16_t)std::lround(mix(p_a.pos.x, p_b.pos.x));
+		m.pos.y = (int16_t)std::lround(mix(p_a.pos.y, p_b.pos.y));
+		m.pos.z = (int16_t)std::lround(mix(p_a.pos.z, p_b.pos.z));
+		if (has_normals) {
+			const double nx = mix(p_a.normal.x, p_b.normal.x), ny = mix(p_a.normal.y, p_b.normal.y), nz = mix(p_a.normal.z, p_b.normal.z);
+			const double len = std::sqrt(nx * nx + ny * ny + nz * nz);
+			const double k = len > 0.0 ? 4096.0 / len : 0.0;
+			m.normal.x = (int16_t)std::lround(nx * k);
+			m.normal.y = (int16_t)std::lround(ny * k);
+			m.normal.z = (int16_t)std::lround(nz * k);
+		}
+		for (int ch = 0; ch < 3; ch++) {
+			m.color[ch] = (uint8_t)std::lround(mix(p_a.color[ch], p_b.color[ch]));
+		}
+		return m;
+	};
+	auto load_end = [&](uint32_t p_id, End &r_end) {
+		r_end.pos = p_mesh.positions[p_id];
+		r_end.normal = has_normals ? p_mesh.normals[p_id] : SVector();
+		const uint8_t *c = p_mesh.colors.data() + (size_t)p_id * 3;
+		for (int ch = 0; ch < 3; ch++) {
+			r_end.color[ch] = tinted ? (uint8_t)((c[ch] * p_params.tint[ch] + 127) / 255) : c[ch];
+		}
+	};
+	// Packets in drawing order, added to the bucket in reverse (it is LIFO).
+	bool stop = false;
+	auto emit = [&](uint32_t p_otz, uint32_t p_packet) {
+		uint32_t order[3];
+		int n = 0;
+		bool full = p_packet == OT_END;
+		auto push = [&](uint32_t p_p) {
+			if (p_p == OT_END) {
+				full = true;
+			} else {
+				order[n++] = p_p;
+			}
+		};
+		if (semi || own_dither) {
+			push(p_builder.raw_words(&mode_word, 1)); // Blend mode and dither for untextured primitives
+		}
+		push(p_packet);
+		if (own_dither) {
+			push(p_builder.raw_words(&restore_mode_word, 1));
+		}
+		if (full) {
+			r_stats.arena_full++;
+			stop = true;
+			return;
+		}
+		for (int k = n - 1; k >= 0; k--) {
+			p_ot.add(p_otz, order[k]);
+		}
+		r_stats.packets += n;
+	};
+	auto otz_of = [&](uint32_t p_avsz) {
+		return (uint32_t)std::clamp((int32_t)(p_avsz >> p_params.ot_shift) + p_params.ot_bias, 0, (int32_t)p_ot.get_size() - 1);
+	};
+	// Projects V0-V2 (RTPT, or the orthographic path); false when a vertex
+	// is nearer than the near plane. r_saturated: a screen coordinate hit the limit.
+	auto project = [&](bool &r_saturated) {
+		r_saturated = false;
+		if (p_params.ortho) {
+			return project_ortho(p_gte, p_params) == 0;
+		}
+		p_gte.rtpt();
+		if (p_gte.flag & FLAG_DIVIDE) {
+			for (int i = 0; i < 3; i++) {
+				if ((uint32_t)p_gte.h >= (uint32_t)p_gte.sz[i + 1] * 2) {
+					return false;
+				}
+			}
+		}
+		r_saturated = (p_gte.flag & (FLAG_SX_SAT | FLAG_SY_SAT)) != 0;
+		return true;
+	};
+
+	for (uint32_t e = 0; e < count && !stop; e++) {
+		if (!lines) {
+			End pt;
+			load_end(p_mesh.indices[e], pt);
+			r_stats.triangles_in++;
+			if (view_z(pt.pos) < near_limit) {
+				r_stats.culled_near++;
+				continue;
+			}
+			p_gte.v[0] = pt.pos;
+			p_gte.v[1] = pt.pos;
+			p_gte.v[2] = pt.pos;
+			bool saturated;
+			if (!project(saturated)) {
+				r_stats.culled_near++;
+				continue;
+			}
+			const uint16_t sz = p_gte.sz[1];
+			if (sz > p_params.far_z) {
+				r_stats.culled_far++;
+				continue;
+			}
+			const int32_t x = p_gte.sx[0] - (point_size - 1) / 2, y = p_gte.sy[0] - (point_size - 1) / 2;
+			if (x + point_size <= 0 || y + point_size <= 0 || x >= p_params.screen_width || y >= p_params.screen_height) {
+				r_stats.culled_offscreen++;
+				continue;
+			}
+			p_gte.avsz3();
+			const uint32_t otz = otz_of(p_gte.otz);
+			uint8_t out[3];
+			int16_t fog;
+			shade_vertex(p_gte, p_params, shade, pt.pos, pt.normal, pt.color, sz, out, fog);
+			emit(otz, p_builder.rectangle(x, y, point_size, point_size, out[0], out[1], out[2], false, false, semi));
+			r_stats.points++;
+			continue;
+		}
+
+		Segment stack[NEAR_SPLIT_DEPTH + 2];
+		load_end(p_mesh.indices[e * 2], stack[0].e[0]);
+		load_end(p_mesh.indices[e * 2 + 1], stack[0].e[1]);
+		stack[0].depth = 0;
+		r_stats.triangles_in++;
+		// Near plane: cut toward the far end; dropped when both ends are nearer.
+		const int64_t z0 = view_z(stack[0].e[0].pos), z1 = view_z(stack[0].e[1].pos);
+		const bool in0 = z0 >= near_limit, in1 = z1 >= near_limit;
+		if (!in0 && !in1) {
+			r_stats.culled_near++;
+			continue;
+		}
+		if (in0 != in1) {
+			const int a = in0 ? 0 : 1, b = 1 - a;
+			const int64_t za = in0 ? z0 : z1, zb = in0 ? z1 : z0;
+			const double cut = std::clamp((double)(za - clip_z) / (double)(za - zb), 0.0, 1.0);
+			stack[0].e[b] = mix_end(stack[0].e[a], stack[0].e[b], cut);
+			r_stats.near_clips++;
+		}
+		int sp = 1;
+		while (sp > 0 && !stop) {
+			const Segment seg = stack[--sp];
+			p_gte.v[0] = seg.e[0].pos;
+			p_gte.v[1] = seg.e[1].pos;
+			p_gte.v[2] = seg.e[1].pos;
+			bool saturated;
+			if (!project(saturated)) {
+				r_stats.culled_near++;
+				continue;
+			}
+			const uint16_t zs[2] = { p_gte.sz[1], p_gte.sz[2] };
+			if (zs[0] > p_params.far_z && zs[1] > p_params.far_z) {
+				r_stats.culled_far++;
+				continue;
+			}
+			const int32_t x0 = p_gte.sx[0], y0 = p_gte.sy[0], x1 = p_gte.sx[1], y1 = p_gte.sy[1];
+			if ((x0 < 0 && x1 < 0) || (y0 < 0 && y1 < 0) ||
+					(x0 >= p_params.screen_width && x1 >= p_params.screen_width) ||
+					(y0 >= p_params.screen_height && y1 >= p_params.screen_height)) {
+				r_stats.culled_offscreen++;
+				continue;
+			}
+			if (seg.depth < NEAR_SPLIT_DEPTH && (saturated || std::abs(x1 - x0) >= max_w || std::abs(y1 - y0) >= max_h)) {
+				const End mid = mix_end(seg.e[0], seg.e[1], 0.5);
+				stack[sp].e[0] = mid;
+				stack[sp].e[1] = seg.e[1];
+				stack[sp++].depth = seg.depth + 1;
+				stack[sp].e[0] = seg.e[0];
+				stack[sp].e[1] = mid;
+				stack[sp++].depth = seg.depth + 1;
+				r_stats.near_splits++;
+				continue;
+			}
+			// AVSZ3 over both ends and their mean: the mean depth.
+			p_gte.sz[3] = (uint16_t)(((uint32_t)zs[0] + zs[1] + 1) >> 1);
+			p_gte.avsz3();
+			const uint32_t otz = otz_of(p_gte.otz);
+			PacketBuilder::Vert v[2];
+			const int32_t xs[2] = { x0, x1 }, ys[2] = { y0, y1 };
+			for (int i = 0; i < 2; i++) {
+				uint8_t out[3];
+				int16_t fog;
+				shade_vertex(p_gte, p_params, shade, seg.e[i].pos, seg.e[i].normal, seg.e[i].color, zs[i], out, fog);
+				v[i].x = xs[i];
+				v[i].y = ys[i];
+				v[i].r = out[0];
+				v[i].g = out[1];
+				v[i].b = out[2];
+			}
+			const bool shaded = v[0].r != v[1].r || v[0].g != v[1].g || v[0].b != v[1].b;
+			emit(otz, p_builder.line(v[0], v[1], shaded, semi));
+			r_stats.lines++;
+		}
+	}
+}
+
 void draw_mesh(GTE &p_gte, PacketBuilder &p_builder, OrderingTable &p_ot, const MeshData &p_mesh, const DrawParams &p_params, DrawStats &r_stats) {
+	if (p_mesh.primitive != MESH_TRIANGLES) {
+		draw_lines_points(p_gte, p_builder, p_ot, p_mesh, p_params, r_stats);
+		return;
+	}
 	const uint32_t tri_count = p_mesh.triangle_count();
-	const bool lit = p_params.lit && !p_mesh.normals.empty();
-	const bool linear = p_params.lighting == LIGHTING_LINEAR;
-	const bool emissive = p_params.emission[0] | p_params.emission[1] | p_params.emission[2];
 	const uint32_t mode_word = 0xE1000000u | GP0Encoder::texpage(0, 0, 0, p_params.blend, p_params.dither);
 	const uint32_t window_off = 0xE2000000u;
 	const uint32_t *idx = p_mesh.indices.data();
@@ -180,13 +519,7 @@ void draw_mesh(GTE &p_gte, PacketBuilder &p_builder, OrderingTable &p_ot, const 
 	// subtractive ones blend every triangle.
 	const bool per_triangle_alpha = p_params.semi && p_params.blend == BLEND_HALF && !p_params.semi_whole;
 	const uint8_t *tri_alpha = (per_triangle_alpha && !p_mesh.triangle_alpha.empty()) ? p_mesh.triangle_alpha.data() : nullptr;
-	const LinearTables &lt = linear_tables();
-	uint32_t emission_linear[3] = { 0, 0, 0 };
-	uint8_t emission[3];
-	for (int c = 0; c < 3; c++) {
-		emission_linear[c] = lt.to_linear[p_params.emission[c]];
-		emission[c] = tex ? to_modulation(p_params.emission[c]) : p_params.emission[c];
-	}
+	const ShadeContext shade = make_shade_context(p_params, !p_mesh.normals.empty(), tex != nullptr);
 	// Textured fog: DPCS toward black darkens the texel by (1 - f); the fog
 	// colour times f is added by a second polygon.
 	const LVector far_color = p_gte.far_color;
@@ -421,72 +754,10 @@ void draw_mesh(GTE &p_gte, PacketBuilder &p_builder, OrderingTable &p_ot, const 
 			int16_t fog_amount[3] = { 0, 0, 0 }; // IR0 per vertex, 4096 = full fog
 			const int32_t xs[3] = { x0, x1, x2 }, ys[3] = { y0, y1, y2 };
 			for (int i = 0; i < 3; i++) {
-				const uint8_t *c = piece.c[i].color;
 				verts[i].x = xs[i];
 				verts[i].y = ys[i];
-				const uint8_t base[3] = { tex ? to_modulation(c[0]) : c[0], tex ? to_modulation(c[1]) : c[1], tex ? to_modulation(c[2]) : c[2] };
-				uint8_t out[3] = { base[0], base[1], base[2] };
-				// Linear 12-bit (1.0 = 4096) back to a drawn or modulation colour.
-				auto from_linear = [&](uint64_t p_v) -> uint8_t {
-					return tex ? lt.to_mod[p_v > 8192 ? 8192 : p_v] : lt.to_srgb[p_v > 4096 ? 4096 : p_v];
-				};
-				if (lit && p_params.point_light_count > 0) {
-					// Directional + ambient from the GTE (NCS), point lights from
-					// the CPU, then the colour maths of the chosen mode.
-					p_gte.v[0] = piece.c[i].normal;
-					p_gte.ncs();
-					int32_t level[3];
-					point_light_level(p_params, piece.c[i].pos, piece.c[i].normal, level);
-					for (int ch = 0; ch < 3; ch++) {
-						int32_t l = p_gte.ir[ch + 1] + level[ch];
-						l = l > 0x7FFF ? 0x7FFF : l;
-						if (linear) {
-							uint64_t v = ((uint64_t)lt.to_linear[c[ch]] * (uint32_t)l) >> 12;
-							v += emission_linear[ch];
-							out[ch] = from_linear(v >> 4);
-						} else {
-							const int32_t v = (base[ch] * l) >> 12;
-							out[ch] = (uint8_t)(v > 255 ? 255 : v);
-						}
-					}
-				} else if (lit && !linear) {
-					// PS1: the display colour times the light, on the GTE.
-					p_gte.v[0] = piece.c[i].normal;
-					p_gte.rgbc.r = base[0];
-					p_gte.rgbc.g = base[1];
-					p_gte.rgbc.b = base[2];
-					p_gte.nccs();
-					out[0] = p_gte.rgb[2].r;
-					out[1] = p_gte.rgb[2].g;
-					out[2] = p_gte.rgb[2].b;
-				} else if (lit) {
-					// Godot match: the light level from the GTE, applied to the
-					// linear colour, plus linear emission, back to sRGB.
-					p_gte.v[0] = piece.c[i].normal;
-					p_gte.ncs();
-					for (int ch = 0; ch < 3; ch++) {
-						uint64_t v = ((uint64_t)lt.to_linear[c[ch]] * (uint16_t)p_gte.ir[ch + 1]) >> 12;
-						v += emission_linear[ch];
-						out[ch] = from_linear(v >> 4); // 16-bit to 12-bit linear
-					}
-				}
-				if (emissive && !(lit && linear)) {
-					for (int ch = 0; ch < 3; ch++) {
-						out[ch] = add_saturate(out[ch], emission[ch]);
-					}
-				}
-				if (p_params.fog) {
-					// Depth cue toward FC by this vertex's own IR0.
-					p_gte.rgbc.r = out[0];
-					p_gte.rgbc.g = out[1];
-					p_gte.rgbc.b = out[2];
-					p_gte.ir[0] = depth_cue(p_gte, zs[i]);
-					fog_amount[i] = p_gte.ir[0];
-					p_gte.dpcs();
-					out[0] = p_gte.rgb[2].r;
-					out[1] = p_gte.rgb[2].g;
-					out[2] = p_gte.rgb[2].b;
-				}
+				uint8_t out[3];
+				shade_vertex(p_gte, p_params, shade, piece.c[i].pos, piece.c[i].normal, piece.c[i].color, zs[i], out, fog_amount[i]);
 				verts[i].r = out[0];
 				verts[i].g = out[1];
 				verts[i].b = out[2];

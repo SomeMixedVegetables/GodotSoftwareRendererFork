@@ -376,6 +376,9 @@ bool convert_mesh(const MeshInput &p_input, const ConvertOptions &p_options, Mes
 		r_mesh = MeshData();
 		return false;
 	}
+	if (p_input.primitive != MESH_TRIANGLES) {
+		return convert_direct(p_input, p_options, r_mesh); // Not textured or subdivided.
+	}
 	const bool textured = p_options.texture_width > 0 && p_options.texture_height > 0 && p_input.uvs;
 	Subdivided prepared;
 	const MeshInput *src = &p_input;
@@ -398,24 +401,31 @@ static bool convert_direct(const MeshInput &p_input, const ConvertOptions &p_opt
 		return false;
 	}
 	const int32_t n = p_input.vertex_count;
+	const bool triangles = p_input.primitive == MESH_TRIANGLES;
+	r_mesh.primitive = p_input.primitive;
 
-	// Triangles: drop any with an out-of-range index.
+	// Triangles (or lines, or points): drop any with an out-of-range index.
+	const int32_t per = triangles ? 3 : (p_input.primitive == MESH_LINES ? 2 : 1);
 	if (p_input.indices) {
 		r_mesh.indices.reserve(p_input.index_count);
-		for (int32_t i = 0; i + 2 < p_input.index_count; i += 3) {
-			const int32_t a = p_input.indices[i], b = p_input.indices[i + 1], c = p_input.indices[i + 2];
-			if (a < 0 || b < 0 || c < 0 || a >= n || b >= n || c >= n) {
+		for (int32_t i = 0; i + per - 1 < p_input.index_count; i += per) {
+			bool valid = true;
+			for (int32_t j = 0; j < per; j++) {
+				const int32_t a = p_input.indices[i + j];
+				valid = valid && a >= 0 && a < n;
+			}
+			if (!valid) {
 				continue;
 			}
-			r_mesh.indices.push_back((uint32_t)a);
-			r_mesh.indices.push_back((uint32_t)b);
-			r_mesh.indices.push_back((uint32_t)c);
+			for (int32_t j = 0; j < per; j++) {
+				r_mesh.indices.push_back((uint32_t)p_input.indices[i + j]);
+			}
 		}
 	} else {
-		for (int32_t i = 0; i + 2 < n; i += 3) {
-			r_mesh.indices.push_back((uint32_t)i);
-			r_mesh.indices.push_back((uint32_t)i + 1);
-			r_mesh.indices.push_back((uint32_t)i + 2);
+		for (int32_t i = 0; i + per - 1 < n; i += per) {
+			for (int32_t j = 0; j < per; j++) {
+				r_mesh.indices.push_back((uint32_t)(i + j));
+			}
 		}
 	}
 	if (r_mesh.indices.empty()) {
@@ -499,7 +509,7 @@ static bool convert_direct(const MeshInput &p_input, const ConvertOptions &p_opt
 
 	// Alpha: the mean of the triangle's vertex alphas, rounded to the PS1's
 	// three levels. Skipped when nothing is below the opaque threshold.
-	if (p_options.use_alpha) {
+	if (p_options.use_alpha && triangles) {
 		const bool vc_alpha = vc;
 		const uint32_t tris = r_mesh.triangle_count();
 		std::vector<uint8_t> classes(tris, TRI_OPAQUE);
@@ -528,7 +538,7 @@ static bool convert_direct(const MeshInput &p_input, const ConvertOptions &p_opt
 	// tiles to the tile it starts in; one that still runs past the edge uses
 	// the texture window. A texel coordinate equal to the size (the far
 	// edge) is pulled in to size - 1, as PS1 tools did.
-	if (p_input.uvs && p_options.texture_width > 0 && p_options.texture_height > 0) {
+	if (triangles && p_input.uvs && p_options.texture_width > 0 && p_options.texture_height > 0) {
 		r_mesh.textured = true;
 		const uint32_t tris = r_mesh.triangle_count();
 		const int32_t sizes[2] = { p_options.texture_width, p_options.texture_height };

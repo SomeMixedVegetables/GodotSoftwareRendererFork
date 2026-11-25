@@ -21,7 +21,15 @@
 
 namespace psx {
 
+// What a mesh's indices describe.
+enum MeshPrimitive : uint8_t {
+	MESH_TRIANGLES = 0, // Three indices per triangle
+	MESH_LINES = 1, // Two per line (drawn with the GPU's line command)
+	MESH_POINTS = 2, // One per point (drawn as a small tile)
+};
+
 struct MeshInput {
+	MeshPrimitive primitive = MESH_TRIANGLES;
 	const float *positions = nullptr; // xyz, vertex_count entries
 	const float *normals = nullptr; // xyz, optional
 	const float *colors = nullptr; // rgba, optional
@@ -85,7 +93,10 @@ struct MeshData {
 	std::vector<SVector> positions; // >> shift
 	std::vector<SVector> normals; // 1.3.12, empty if the input had none
 	std::vector<uint8_t> colors; // rgb, one triple per vertex
-	std::vector<uint32_t> indices; // three per triangle
+	MeshPrimitive primitive = MESH_TRIANGLES;
+	// Three per triangle, two per line or one per point. Lines and points
+	// are never textured or subdivided and have no alpha classes.
+	std::vector<uint32_t> indices;
 	// Textured meshes: u, v per triangle corner (six per triangle), in texels
 	// relative to the texture's top-left corner.
 	std::vector<uint8_t> tri_uvs;

@@ -97,10 +97,10 @@ struct PSXDebug {
 		}
 	}
 
-	void report_scene(uint64_t p_frame, uint32_t p_instances, uint32_t p_surfaces, uint32_t p_conversions, uint32_t p_triangles, uint32_t p_near, uint32_t p_backface, uint32_t p_offscreen, uint32_t p_far) const {
+	void report_scene(uint64_t p_frame, uint32_t p_instances, uint32_t p_surfaces, uint32_t p_conversions, uint32_t p_triangles, uint32_t p_near, uint32_t p_backface, uint32_t p_offscreen, uint32_t p_far, uint32_t p_lines, uint32_t p_points) const {
 		if (print_stats) {
-			print_line(vformat("PSX_SCENE frame=%d instances=%d surfaces=%d conversions=%d tris_in=%d near=%d backface=%d offscreen=%d far=%d",
-					(int64_t)p_frame, p_instances, p_surfaces, p_conversions, p_triangles, p_near, p_backface, p_offscreen, p_far));
+			print_line(vformat("PSX_SCENE frame=%d instances=%d surfaces=%d conversions=%d tris_in=%d near=%d backface=%d offscreen=%d far=%d lines=%d points=%d",
+					(int64_t)p_frame, p_instances, p_surfaces, p_conversions, p_triangles, p_near, p_backface, p_offscreen, p_far, p_lines, p_points));
 		}
 	}
 

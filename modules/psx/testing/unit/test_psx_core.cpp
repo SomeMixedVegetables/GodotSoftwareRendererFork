@@ -585,6 +585,113 @@ static void test_draw_mesh_features() {
 	CHECK_EQ(draw(opaque, fp, gte, s4), rgb15(25, 0, 0));
 }
 
+static void test_lines_and_points() {
+	// Two edges of a 200-unit square as lines, green and unlit (no normals).
+	const float pos[] = { -100, -100, 0, 100, -100, 0, -100, 100, 0, 100, 100, 0 };
+	const int32_t edges[] = { 0, 1, 1, 3, 2, 7 }; // The last has an index out of range: dropped.
+	MeshInput in;
+	in.primitive = MESH_LINES;
+	in.positions = pos;
+	in.vertex_count = 4;
+	in.indices = edges;
+	in.index_count = 6;
+	ConvertOptions opt;
+	opt.scale = 1.0f;
+	opt.albedo[0] = 0.0f;
+	opt.albedo[1] = 1.0f;
+	opt.albedo[2] = 0.0f;
+	opt.max_edge = 10.0f; // Lines are never subdivided.
+	MeshData m;
+	CHECK(convert_mesh(in, opt, m));
+	CHECK_EQ(m.primitive, MESH_LINES);
+	CHECK_EQ(m.indices.size(), 4u);
+
+	const uint16_t green = rgb15(0, 31, 0);
+	auto run = [&](const MeshData &p_mesh, int32_t p_z, const DrawParams &p_params, DrawStats &r_stats, GPU &r_gpu) {
+		GTE gte = basic_gte();
+		gte.translation = { 0, 0, p_z };
+		PacketArena arena(1u << 12);
+		PacketBuilder pb(arena, r_gpu.get_encoder());
+		OrderingTable ot(arena, 256);
+		ot.clear();
+		ot.add(255, pb.environment(0, 0, 319, 239, 0, 0, GP0Encoder::texpage(0, 0, 0, 0, false)));
+		draw_mesh(gte, pb, ot, p_mesh, p_params, r_stats);
+		ot.draw(r_gpu);
+	};
+	{
+		// At Z 1000 the square spans 134..185 x 94..145 (H = 256: 25.6 pixels from the centre, floored).
+		GPU g;
+		DrawParams params;
+		params.frame_dither = false;
+		params.dither = false;
+		DrawStats st;
+		run(m, 1000, params, st, g);
+		CHECK_EQ(st.lines, 2);
+		CHECK_EQ(g.vram_get(160, 94), green); // Top edge
+		CHECK_EQ(g.vram_get(185, 120), green); // Right edge
+		CHECK_EQ(g.vram_get(160, 120), 0); // Inside: lines only
+		CHECK_EQ(g.vram_get(134, 120), 0); // The left edge was not given
+	}
+	{
+		// A line from behind the camera to in front of it is cut at the near plane.
+		const float cross_pos[] = { 0, 0, -2000, 0, 40, 0 };
+		MeshInput ci;
+		ci.primitive = MESH_LINES;
+		ci.positions = cross_pos;
+		ci.vertex_count = 2;
+		MeshData cm;
+		CHECK(convert_mesh(ci, opt, cm));
+		GPU g;
+		DrawParams params;
+		DrawStats st;
+		run(cm, 1000, params, st, g);
+		CHECK_EQ(st.near_clips, 1);
+		CHECK_EQ(st.lines, 1);
+		CHECK_EQ(g.vram_get(160, 130), green); // (0, 40) at Z 1000: y = 120 + 10.24
+	}
+	{
+		// A line far wider than the screen range is split until the GPU takes it.
+		const float wide_pos[] = { -5000, 0, 0, 5000, 0, 0 };
+		MeshInput wi;
+		wi.primitive = MESH_LINES;
+		wi.positions = wide_pos;
+		wi.vertex_count = 2;
+		MeshData wm;
+		CHECK(convert_mesh(wi, opt, wm));
+		GPU g;
+		DrawParams params;
+		params.frame_dither = false;
+		params.dither = false;
+		DrawStats st;
+		run(wm, 300, params, st, g);
+		CHECK(st.near_splits >= 1);
+		CHECK(st.lines >= 2);
+		CHECK_EQ(g.vram_get(160, 120), green);
+		CHECK_EQ(g.vram_get(10, 120), green);
+	}
+	{
+		// Points: a square tile of point_size pixels centred on the vertex.
+		const float pt_pos[] = { 0, 0, 0 };
+		MeshInput pi;
+		pi.primitive = MESH_POINTS;
+		pi.positions = pt_pos;
+		pi.vertex_count = 1;
+		MeshData pm;
+		CHECK(convert_mesh(pi, opt, pm));
+		CHECK_EQ(pm.primitive, MESH_POINTS);
+		GPU g;
+		DrawParams params;
+		params.point_size = 3;
+		DrawStats st;
+		run(pm, 1000, params, st, g);
+		CHECK_EQ(st.points, 1);
+		CHECK_EQ(g.vram_get(159, 119), green);
+		CHECK_EQ(g.vram_get(161, 121), green);
+		CHECK_EQ(g.vram_get(162, 120), 0);
+		CHECK_EQ(g.vram_get(158, 120), 0);
+	}
+}
+
 static void test_subdivide_and_point_lights() {
 	const float pos[] = { -100, -100, 0, 100, -100, 0, -100, 100, 0, 100, 100, 0 };
 	const float nrm[] = { 0, 0, -1, 0, 0, -1, 0, 0, -1, 0, 0, -1 };
@@ -1912,6 +2019,7 @@ int main(int argc, char **argv) {
 		{ "draw_mesh", test_draw_mesh },
 		{ "draw_mesh_features", test_draw_mesh_features },
 		{ "subdivide_and_point_lights", test_subdivide_and_point_lights },
+		{ "lines_and_points", test_lines_and_points },
 		{ "convert_texture", test_convert_texture },
 		{ "baked_textures", test_baked_textures },
 		{ "palettes", test_palettes },

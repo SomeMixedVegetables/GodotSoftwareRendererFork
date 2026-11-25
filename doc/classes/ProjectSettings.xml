@@ -3317,7 +3317,7 @@
 			How many frames, from the first, [member rendering/psx/debug/dump_dir] saves.
 		</member>
 		<member name="rendering/psx/debug/print_stats" type="bool" setter="" getter="" default="false">
-			If [code]true[/code], the PS1 renderer prints its statistics every frame ([code]PSX_STATS[/code], [code]PSX_SCENE[/code], [code]PSX_TEXTURES[/code] and [code]PSX_CONVERT[/code] lines; [code]PSX_CONVERT[/code] gives the time spent reading meshes and images back from Godot, converting them, skinning and blend shapes, which [code]skinned=[/code] counts, and reading GPUParticles3D back, with [code]particles=[/code] the particles drawn). Scripts can read the same figures with [method PSX.get_stats].
+			If [code]true[/code], the PS1 renderer prints its statistics every frame ([code]PSX_STATS[/code], [code]PSX_SCENE[/code] (with [code]lines=[/code] and [code]points=[/code], the lines and points drawn), [code]PSX_TEXTURES[/code] and [code]PSX_CONVERT[/code] lines; [code]PSX_CONVERT[/code] gives the time spent reading meshes and images back from Godot, converting them, skinning and blend shapes, which [code]skinned=[/code] counts, and reading GPUParticles3D back, with [code]particles=[/code] the particles drawn). Scripts can read the same figures with [method PSX.get_stats].
 		</member>
 		<member name="rendering/psx/default_ambient" type="Color" setter="" getter="" default="Color(0.2, 0.2, 0.2, 1)">
 			The ambient light the PS1 renderer uses when the scene has no [WorldEnvironment]. Can be overridden per scene with [PSXSettings] and by scripts with [method PSX.set_setting].

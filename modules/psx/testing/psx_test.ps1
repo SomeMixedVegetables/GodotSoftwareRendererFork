@@ -116,6 +116,9 @@ $ExpectMeshesSettled = @('skinned', 'blend_shapes')
 # Scenes with GPUParticles3D: the last PSX_CONVERT line must report particles
 # drawn (particles= more than zero), so the image is not passing vacuously.
 $ExpectParticles = @('gpu_particles')
+# Scenes with line and point meshes: the last PSX_SCENE line must report both
+# drawn (lines= and points= more than zero).
+$ExpectLinesPoints = @('lines_points')
 
 function Get-GoldenDir([string]$SceneName) {
 	if ($GoldenAliases.ContainsKey($SceneName)) { $SceneName = $GoldenAliases[$SceneName] }
@@ -364,6 +367,14 @@ function Invoke-Check([string]$SceneName) {
 		$partOk = $drawn -gt 0
 		Write-Result "PSX_CHECK scene=$SceneName image=particles_drawn result=$(if ($partOk) {'pass'} else {'fail'}) particles=$drawn"
 		$results += $partOk
+	}
+	if ($ExpectLinesPoints -contains $SceneName) {
+		$scene = @($s.psx_lines | Where-Object { $_ -match '^PSX_SCENE' } | Select-Object -Last 1)
+		$lines = if ($scene.Count -and $scene[0] -match ' lines=(\d+)') { [int]$Matches[1] } else { -1 }
+		$points = if ($scene.Count -and $scene[0] -match ' points=(\d+)') { [int]$Matches[1] } else { -1 }
+		$lpOk = $lines -gt 0 -and $points -gt 0
+		Write-Result "PSX_CHECK scene=$SceneName image=lines_drawn result=$(if ($lpOk) {'pass'} else {'fail'}) lines=$lines points=$points"
+		$results += $lpOk
 	}
 	if ($ExpectTextureStats.ContainsKey($SceneName)) {
 		$tex = @($s.psx_lines | Where-Object { $_ -match '^PSX_TEXTURES' } | Select-Object -Last 1)

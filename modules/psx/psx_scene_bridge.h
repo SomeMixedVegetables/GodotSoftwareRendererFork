@@ -88,6 +88,9 @@ struct PSXMaterialInfo {
 	int32_t anim_h = 1;
 	int32_t anim_v = 1;
 	int32_t render_priority = 0; // Material render_priority: higher draws over lower
+	// Point meshes: StandardMaterial3D's point_size when use_point_size is
+	// on, in pixels; 1 otherwise. Drawn at the PS1 frame's resolution.
+	float point_size = 1.0f;
 	// PSXMaterial3D overrides (PSXMaterialOverrides::Dither; DEFAULT = the
 	// resolved dither setting). no_subdivide is baked into meshes.
 	uint8_t dither = 0;
@@ -141,6 +144,7 @@ PSXMaterialInfo psx_read_material(RID p_material) {
 	info.render_priority = (int32_t)md->priority + RSE::MATERIAL_RENDER_PRIORITY_MIN; // Stored as 0..255
 	const ShaderDataT *sd = static_cast<const ShaderDataT *>(ms->material_get_shader_data(p_material));
 	bool emissive = false;
+	bool point_size = false; // use_point_size
 	// StandardMaterial3D's uniform names; a custom shader's first colour and
 	// texture uniforms marked source_color stand in for them.
 	StringName color_param = "albedo";
@@ -180,6 +184,7 @@ PSXMaterialInfo psx_read_material(RID p_material) {
 		}
 		info.billboard_keep_scale = sd->code.contains("// Billboard Keep Scale: Enabled");
 		info.anim = sd->code.contains("particle_total_frames");
+		point_size = sd->code.contains("POINT_SIZE = point_size");
 		using U = ShaderLanguage::ShaderNode::Uniform;
 		if (!sd->uniforms.has(color_param)) {
 			int best = INT_MAX;
@@ -230,6 +235,12 @@ PSXMaterialInfo psx_read_material(RID p_material) {
 		const Variant cut = ms->material_get_param(p_material, "alpha_scissor_threshold");
 		if (cut.get_type() == Variant::FLOAT) {
 			info.alpha_cut = CLAMP((float)cut, 0.0f, 1.0f);
+		}
+	}
+	if (point_size) {
+		const Variant ps = param("point_size");
+		if (ps.get_type() == Variant::FLOAT || ps.get_type() == Variant::INT) {
+			info.point_size = MAX((float)ps, 1.0f);
 		}
 	}
 	const Variant albedo = param(color_param);
@@ -470,6 +481,8 @@ public:
 
 private:
 	struct SourceSurface {
+		// Triangles, lines or points; strips are read as lists.
+		psx::MeshPrimitive primitive = psx::MESH_TRIANGLES;
 		uint32_t vertex_count = 0;
 		LocalVector<float> positions, normals, colors, uvs;
 		LocalVector<int32_t> indices;
@@ -866,6 +879,7 @@ private:
 			params.far_z = f.far_z;
 			params.screen_width = f.width;
 			params.screen_height = f.height;
+			params.point_size = MAX(1, (int)Math::round(mat.point_size)) * f.gte.scale;
 			psx::draw_mesh(f.gte, *f.builder, *f.ot, *data, params, f.stats->draw);
 		}
 	}
@@ -1052,6 +1066,7 @@ private:
 		in.vertex_count = (int32_t)p_src.vertex_count;
 		in.indices = p_src.indices.is_empty() ? nullptr : p_src.indices.ptr();
 		in.index_count = (int32_t)p_src.indices.size();
+		in.primitive = p_src.primitive;
 		return in;
 	}
 
@@ -1132,8 +1147,8 @@ private:
 		for (int i = 0; i < surface_count; i++) {
 			// The const overload reads the surface back; the other returns a raw pointer.
 			const RenderingServerTypes::SurfaceData sd = static_cast<const RendererRD::MeshStorage *>(p_storage)->mesh_get_surface(p_mesh, i);
-			if (sd.primitive != RSE::PRIMITIVE_TRIANGLES || sd.vertex_count == 0) {
-				continue; // Lines and points: not drawn yet.
+			if (sd.vertex_count == 0 || sd.primitive >= RSE::PRIMITIVE_MAX) {
+				continue;
 			}
 			const Array arrays = RenderingServer::get_singleton()->mesh_create_arrays_from_surface_data(sd);
 			if (arrays.size() != RSE::ARRAY_MAX) {
@@ -1185,10 +1200,7 @@ private:
 					dst.uvs[v * 2 + 1] = (float)uvs[v].y;
 				}
 			}
-			dst.indices.resize(indices.size());
-			for (int k = 0; k < indices.size(); k++) {
-				dst.indices[k] = indices[k];
-			}
+			_read_indices(sd.primitive, indices, n, dst);
 			if (n > 0 && bones.size() >= n * 4 && bones.size() == weights.size() && bones.size() % n == 0) {
 				dst.influences = bones.size() / n;
 				dst.bones.resize(bones.size());
@@ -1201,6 +1213,37 @@ private:
 			_read_blend_shapes(sd, dst);
 		}
 		return entry;
+	}
+
+	// The surface's indices as a list: strips are unrolled (a triangle
+	// strip's odd triangles flipped to keep the winding), and a strip with
+	// no index array uses its vertices in order.
+	static void _read_indices(RSE::PrimitiveType p_primitive, const PackedInt32Array &p_indices, int p_vertex_count, SourceSurface &r_dst) {
+		r_dst.primitive = p_primitive == RSE::PRIMITIVE_POINTS ? psx::MESH_POINTS : ((p_primitive == RSE::PRIMITIVE_LINES || p_primitive == RSE::PRIMITIVE_LINE_STRIP) ? psx::MESH_LINES : psx::MESH_TRIANGLES);
+		const bool strip = p_primitive == RSE::PRIMITIVE_LINE_STRIP || p_primitive == RSE::PRIMITIVE_TRIANGLE_STRIP;
+		if (!strip) {
+			r_dst.indices.resize(p_indices.size());
+			for (int k = 0; k < p_indices.size(); k++) {
+				r_dst.indices[k] = p_indices[k];
+			}
+			return;
+		}
+		const int count = p_indices.is_empty() ? p_vertex_count : p_indices.size();
+		auto at = [&](int p_k) { return p_indices.is_empty() ? p_k : p_indices[p_k]; };
+		r_dst.indices.clear();
+		if (p_primitive == RSE::PRIMITIVE_LINE_STRIP) {
+			for (int k = 0; k + 1 < count; k++) {
+				r_dst.indices.push_back(at(k));
+				r_dst.indices.push_back(at(k + 1));
+			}
+			return;
+		}
+		for (int k = 0; k + 2 < count; k++) {
+			const bool odd = (k & 1) != 0;
+			r_dst.indices.push_back(at(k));
+			r_dst.indices.push_back(at(odd ? k + 2 : k + 1));
+			r_dst.indices.push_back(at(odd ? k + 1 : k + 2));
+		}
 	}
 
 	// Decodes a surface's blend shapes (stored uncompressed, positions and

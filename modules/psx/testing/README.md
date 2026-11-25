@@ -41,6 +41,7 @@ window frames, `-Stats`, `-Dev`, `-ModelsDir <folder>`, `-ModelsPerCategory 2`.
 | `palettes` | PSXPalette: three textures baked with one generated 16-entry palette (one with cut-out holes), the first with the palette swapped per material (same, warm, grey), and a runtime texture converted to the palette next to one with its own. The check also reads `PSX_TEXTURES`: 5 CLUTs and 5 shared slots (one CLUT for the palette, texels shared by the swaps) |
 | `texture_dither` | Ordered texture dither: a gradient with an 8-colour palette, a dark gradient at 15-bit and a gradient with a fixed 4-colour PSXPalette, baked without (top) and with (middle) dither; runtime textures dithered by `rendering/psx/textures/dither` (bottom, set in its `.override.cfg`) |
 | `gpu_particles` | GPUParticles3D built from nodes: billboards coloured by a ramp (local coordinates), spinning cubes (global coordinates) and an emitter with two draw passes, fixed seed. Also fails if the last `PSX_CONVERT` line reports no particles drawn (`particles_drawn`) |
+| `lines_points` | Line and point meshes from `tools/make_line_meshes.gd`, placed with nodes: a wire cube with vertex colours (lines), a helix (line strip), point grids at point_size 4 and 1, a lit ribbon (triangle strip) and a long wire box cut at the near plane. Also fails if the last `PSX_SCENE` line reports no lines or no points drawn (`lines_drawn`) |
 | `particles_anim` | Particle animation frames (a 4 x 2 sheet, frames picked by custom data Z, clamped and looped) and per-instance MultiMesh colours on a material that uses vertex colour |
 | `skinned` | A two-bone mesh built in code, bent every frame (CPU skinning). Also fails if the mesh is read back from Godot again after its first frame (`meshes_settled`) |
 | `blend_shapes` | Meshes with two blend shapes built in code, weights changed every frame (CPU blend shapes): normalized (left), relative (middle), and on a skinned mesh (right). Also fails if a mesh is read back again after its first frame (`meshes_settled`) |
@@ -86,7 +87,8 @@ Some scenes add checks: `baked_in_use` (the baked texture count),
 when the scene turns the PS1 view off), `textures_settled` (no texture
 uploads in each viewport's last frame), `meshes_settled` (no mesh read
 back from Godot in the last two frames: `skinned`, `blend_shapes`) and
-`particles_drawn` (the last frame drew GPUParticles3D particles: `gpu_particles`).
+`particles_drawn` (the last frame drew GPUParticles3D particles: `gpu_particles`)
+and `lines_drawn` (the last frame drew lines and points: `lines_points`).
 
 ## Unit tests
 
@@ -134,7 +136,7 @@ work in any project:
 | `rendering/psx/debug/demo_scene` | Draw the built-in test cube instead of the scene |
 | `rendering/psx/debug/dump_dir` | Folder to save raw PSX frames to |
 | `rendering/psx/debug/dump_frames` | How many frames to save, from frame 0 |
-| `rendering/psx/debug/print_stats` | One `PSX_STATS` and one `PSX_SCENE` line per frame: timings, instances, triangles in and culled by reason. `PSX_CONVERT`: time spent reading meshes and images back from Godot, converting them, and skinning, with counts |
+| `rendering/psx/debug/print_stats` | One `PSX_STATS` and one `PSX_SCENE` line per frame: timings, instances, triangles in and culled by reason, lines and points drawn. `PSX_CONVERT`: time spent reading meshes and images back from Godot, converting them, and skinning, with counts |
 
 ## Texture memory
 
@@ -262,7 +264,14 @@ preview)`.
   (which waits for the GPU) and drawn the same way; their trails are not
   drawn.
 - Triangles that cross the near plane are clipped there, and ones too big
-  for the GPU are split, so the GTE and GPU limits do not drop them.
+  for the GPU are split, so the GTE and GPU limits do not drop them. Lines
+  are cut and split the same way.
+- Line meshes (lines and line strips) use the GPU's line command: one pixel
+  wide at the PS1 frame's resolution, untextured. Point meshes are square
+  tiles of the material's point_size (with use_point_size; 1 otherwise),
+  counted in PS1 frame pixels rather than window pixels, so they look
+  larger than Godot's. Both are lit per vertex when they have normals.
+  Triangle strips are drawn as triangle lists.
 - A ViewportTexture is read back from the GPU and converted (at 15-bit) every
   frame it is drawn, which costs a GPU sync; other textures are read again
   only when they change.

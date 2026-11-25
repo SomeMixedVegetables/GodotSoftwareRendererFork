@@ -132,6 +132,9 @@ struct DrawParams {
 	// Visible screen rectangle (relative to the drawing offset).
 	int32_t screen_width = 320;
 	int32_t screen_height = 240;
+	// Point meshes (MESH_POINTS): each point is a square tile this many
+	// pixels wide. Lines are always one pixel wide, as on the GPU.
+	int32_t point_size = 1;
 };
 
 struct DrawStats {
@@ -148,6 +151,8 @@ struct DrawStats {
 	uint32_t windowed = 0; // Of those, drawn with the texture window
 	uint32_t fog_passes = 0; // Additive fog polygons over textured ones
 	uint32_t banked = 0; // Textured triangles in texture banks above 0
+	uint32_t lines = 0; // Lines drawn (MESH_LINES; triangles_in counts them in)
+	uint32_t points = 0; // Points drawn (MESH_POINTS; likewise)
 	uint32_t arena_full = 0;
 
 	void add(const DrawStats &p_other);
