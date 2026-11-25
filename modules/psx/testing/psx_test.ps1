@@ -92,10 +92,10 @@ function Get-Scenes {
 # Scenes checked against another scene's goldens: they must draw the same
 # PS1 frame by a different route (baked textures vs runtime conversion).
 # bless leaves them alone.
-$GoldenAliases = @{ 'textured_baked' = 'textured'; 'gltf_baked' = 'gltf_runtime' }
+$GoldenAliases = @{ 'textured_baked' = 'textured'; 'gltf_baked' = 'gltf_runtime'; 'gltf_shader_baked' = 'gltf_runtime'; 'gltf_shader_runtime' = 'gltf_runtime' }
 # How many resident textures each scene's last PSX_TEXTURES line must report
 # as baked (its override.cfg turns print_stats on).
-$ExpectBaked = @{ 'textured_baked' = 6; 'gltf_baked' = 2 }
+$ExpectBaked = @{ 'textured_baked' = 6; 'gltf_baked' = 2; 'gltf_shader_baked' = 2 }
 # A line each scene's run must print (its script checks itself).
 $ExpectLines = @{ 'controls' = 'PSX_CONTROLS result=pass'; 'controls_off' = 'PSX_CONTROLS result=pass' }
 # Scenes that switch the PS1 view off (PSXSettings active = false): Godot's
@@ -214,7 +214,7 @@ function Initialize-Project([bool]$Force = $false) {
 	New-Item -ItemType Directory -Force $OutRoot | Out-Null
 	# The glTF test models are written by a script, never committed (model
 	# files are git-ignored); write them when missing and import them.
-	if (-not (Test-Path (Join-Path $Project 'models\psx_quads_runtime.gltf'))) {
+	if (-not (Test-Path (Join-Path $Project 'models\psx_shader_runtime.gltf'))) {
 		$m = Invoke-Godot @('--headless', '--path', $Project, '--script', 'res://tools/make_test_models.gd') (Join-Path $OutRoot 'models.log') (Join-Path $OutRoot 'models.err')
 		Write-Result "PSX_MODELS result=$(if ($m.Code -eq 0) {'pass'} else {'fail'}) godot_exit=$($m.Code)"
 		if ($m.Code -ne 0) { throw "Writing the test models failed; see $OutRoot\models.err" }

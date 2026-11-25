@@ -5,7 +5,7 @@
 	</brief_description>
 	<description>
 		The PS1 renderer draws textures from 4-bit or 8-bit palettes or 15-bit colour, at most 256×256. It converts an ordinary texture the first time it draws it. A PSXTexture carries that conversion already done, so nothing is converted while the game runs, and the result can be checked in the editor.
-		Make one by importing an image with [b]Import As: PSX Texture[/b] in the Import dock (see [ResourceImporterPSXTexture]), by turning on [code]psx/bake_textures[/code] in a 3D model's import settings, or from a script with [method bake].
+		Make one by importing an image with [b]Import As: PSX Texture[/b] in the Import dock (see [ResourceImporterPSXTexture]), by turning on [code]psx/bake_textures[/code] in a 3D model's import settings, or from a script with [method bake]. Model imports bake each material's albedo texture; for a [ShaderMaterial] made during the import, the sampler the PS1 renderer draws with ([code]texture_albedo[/code], else the first [code]sampler2D[/code] marked [code]source_color[/code]).
 		It is an [ImageTexture], so Godot's renderers and the editor draw it like any other texture. Its image is either the source image or a preview of the PS1 result.
 	</description>
 	<tutorials>

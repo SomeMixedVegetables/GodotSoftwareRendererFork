@@ -17,6 +17,10 @@ window/size/resizable=false
 
 renderer/rendering_method="forward_plus"
 
+[editor_plugins]
+
+enabled=PackedStringArray("res://addons/psx_test_gltf_shader/plugin.cfg")
+
 [importer_defaults]
 
 scene={

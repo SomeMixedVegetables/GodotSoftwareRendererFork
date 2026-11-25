@@ -1,6 +1,11 @@
 // PSX options for 3D scene imports (glTF, .blend, FBX ...): bakes each
 // material's albedo texture into a PSXTexture (psx_texture_resource.h) as
 // the scene is imported, so the PSX renderer does not convert it when drawn.
+// BaseMaterial3D bakes its albedo texture; a ShaderMaterial (made by a glTF
+// document extension, say) bakes the sampler the renderer draws with:
+// texture_albedo, or the first sampler2D marked source_color. Materials
+// swapped in afterwards (use_external, import scripts) are not baked: import
+// their image files as PSX Texture instead.
 //
 // Import dock (whole scene): psx/bake_textures turns it on; psx/max_size,
 // psx/depth, psx/max_colors, psx/dither, psx/palette and psx/ps1_preview

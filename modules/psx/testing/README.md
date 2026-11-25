@@ -33,6 +33,7 @@ window frames, `-Stats`, `-Dev`, `-ModelsDir <folder>`, `-ModelsPerCategory 2`.
 | `lighting_godot` | The same scene with `lighting_mode` = Godot Match |
 | `gltf_runtime` | `models/psx_quads_runtime.gltf`: three quads with embedded textures (opaque, alpha-scissor at 0.3, checker), converted when drawn |
 | `gltf_baked` | The same model imported with `psx/bake_textures` on (checker set to Never). Checked against `gltf_runtime`'s goldens and must report exactly 2 baked textures |
+| `gltf_shader_runtime`, `gltf_shader_baked` | The same model imported with ShaderMaterials (a `source_color` sampler; the `psx_test_gltf_shader` editor plugin's glTF extension makes them), converted when drawn and baked on import. Both are checked against `gltf_runtime`'s goldens; the baked one must report exactly 2 baked textures |
 | `fog_multimesh` | Depth fog, sky fog, a MultiMesh grid and a large subdivided ground |
 | `ortho` | An orthographic camera |
 | `overlay` | A ring on layer 21 (where the editor puts gizmos and the grid): Godot's renderer draws it over the PS1 frame, in the composite only. Run with `-Renderer mobile` to check the overlay on Mobile |
@@ -205,13 +206,18 @@ readback or conversion when the texture is first drawn.
 **Models (glTF, .blend, FBX ...).** Select the model, turn on **Psx > Bake
 Textures** in the Import dock and reimport: every material's albedo texture
 is baked as the scene imports, embedded or extracted, as a copy saved in the
-imported scene. The dock's other Psx options are the image importer's; in
+imported scene. A ShaderMaterial the import makes (a glTF document extension,
+say) bakes the sampler the renderer draws with: `texture_albedo`, else the
+first `sampler2D` marked `source_color`, cut at its `alpha_scissor_threshold`
+uniform. Materials swapped in after the import (`use_external`, import
+scripts) are not baked; import their images as PSX Texture instead. The
+dock's other Psx options are the image importer's; in
 Advanced Import Settings each material has **Psx > Bake** (Scene Setting,
 Always, Never) and its own size, depth and colour overrides. Cut-outs are
 baked at the material's own alpha scissor threshold. An extracted image that
 is itself imported as PSX Texture is left linked, with its own settings; any
 other extracted image that changes later needs the model reimported.
-`models/psx_quads_*.gltf` are written by `tools/make_test_models.gd` when missing (procedural textures,
+`models/psx_quads_*.gltf` and `models/psx_shader_*.gltf` are written by `tools/make_test_models.gd` when missing (procedural textures,
 no third-party content).
 
 Images with alpha are baked three times: opaque, cut-out and blended, so any

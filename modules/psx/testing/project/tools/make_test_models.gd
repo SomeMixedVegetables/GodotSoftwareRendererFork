@@ -12,8 +12,11 @@ extends SceneTree
 ##     threshold).
 ##   Checker: 16 x 16; psx_quads_baked.gltf.import sets it to psx/bake = Never.
 ## The _baked and _runtime files are identical; only their import settings differ.
+## psx_shader_*.gltf: the same again, imported with ShaderMaterials by the
+##   psx_test_gltf_shader editor plugin (baking ShaderMaterial textures).
 
-const OUTPUTS := ["res://models/psx_quads_baked.gltf", "res://models/psx_quads_runtime.gltf"]
+const OUTPUTS := ["res://models/psx_quads_baked.gltf", "res://models/psx_quads_runtime.gltf",
+		"res://models/psx_shader_baked.gltf", "res://models/psx_shader_runtime.gltf"]
 
 
 func _init() -> void:

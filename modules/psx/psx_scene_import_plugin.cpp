@@ -6,6 +6,57 @@
 
 #include "core/io/resource_loader.h"
 #include "scene/resources/material.h"
+#include "scene/resources/shader.h"
+#include "servers/rendering/rendering_server.h"
+#include "servers/rendering/shader_language.h"
+#include "servers/rendering/shader_preprocessor.h"
+#include "servers/rendering/shader_types.h"
+
+static ShaderLanguage::DataType _global_uniform_type(const StringName &p_name) {
+	const RSE::GlobalShaderParameterType t = RS::get_singleton()->global_shader_parameter_get_type(p_name);
+	return (ShaderLanguage::DataType)RS::global_shader_uniform_type_get_shader_datatype(t);
+}
+
+// The uniform the PSX renderer reads a spatial shader's texture from, as
+// the bridge chooses it (psx_scene_bridge.h, _material_info):
+// texture_albedo if the shader has one (a converted StandardMaterial3D),
+// else the first sampler2D marked source_color. Empty when there is none or
+// the shader does not compile.
+static StringName _shader_albedo_uniform(const Ref<Shader> &p_shader) {
+	if (p_shader.is_null() || p_shader->get_mode() != Shader::MODE_SPATIAL) {
+		return StringName();
+	}
+	String code;
+	ShaderPreprocessor preprocessor;
+	if (preprocessor.preprocess(p_shader->get_code(), p_shader->get_path(), code) != OK) {
+		return StringName();
+	}
+	ShaderLanguage sl;
+	ShaderLanguage::ShaderCompileInfo info;
+	info.functions = ShaderTypes::get_singleton()->get_functions(RSE::SHADER_SPATIAL);
+	info.render_modes = ShaderTypes::get_singleton()->get_modes(RSE::SHADER_SPATIAL);
+	info.stencil_modes = ShaderTypes::get_singleton()->get_stencil_modes(RSE::SHADER_SPATIAL);
+	info.shader_types = ShaderTypes::get_singleton()->get_types();
+	info.global_shader_uniform_type_func = _global_uniform_type;
+	if (sl.compile(code, info) != OK) {
+		return StringName();
+	}
+	using U = ShaderLanguage::ShaderNode::Uniform;
+	const HashMap<StringName, U> &uniforms = sl.get_shader()->uniforms;
+	if (uniforms.has("texture_albedo")) {
+		return "texture_albedo";
+	}
+	StringName best_name;
+	int best = INT_MAX;
+	for (const KeyValue<StringName, U> &kv : uniforms) {
+		const U &u = kv.value;
+		if (u.scope == U::SCOPE_LOCAL && u.use_color && u.type == ShaderLanguage::TYPE_SAMPLER2D && u.texture_order < best) {
+			best = u.texture_order;
+			best_name = kv.key;
+		}
+	}
+	return best_name;
+}
 
 void PSXSceneImportPlugin::get_import_options(const String &p_path, List<ResourceImporter::ImportOption> *r_options) {
 	using IO = ResourceImporter::ImportOption;
@@ -50,10 +101,12 @@ void PSXSceneImportPlugin::internal_process(InternalImportCategory p_category, N
 	if (p_category != INTERNAL_IMPORT_CATEGORY_MATERIAL || !active) {
 		return;
 	}
-	const Ref<BaseMaterial3D> mat = p_resource;
-	if (mat.is_null()) {
-		return; // ShaderMaterial and others: not baked.
+	const Ref<BaseMaterial3D> base = p_resource;
+	const Ref<ShaderMaterial> shader_mat = p_resource;
+	if (base.is_null() && shader_mat.is_null()) {
+		return;
 	}
+	const Ref<Material> mat = p_resource;
 	auto scene = [this](const char *p_name, const Variant &p_default) -> Variant {
 		const Variant *v = scene_options.getptr(StringName(p_name));
 		return v ? *v : p_default;
@@ -65,7 +118,20 @@ void PSXSceneImportPlugin::internal_process(InternalImportCategory p_category, N
 	if (bake == 2 || (bake == 0 && !(bool)scene("psx/bake_textures", false))) {
 		return;
 	}
-	const Ref<Texture2D> tex = mat->get_texture(BaseMaterial3D::TEXTURE_ALBEDO);
+	// The texture the PSX renderer draws with: the albedo of a
+	// BaseMaterial3D, or a ShaderMaterial's albedo sampler (texture_albedo,
+	// or the first sampler2D marked source_color).
+	StringName shader_param;
+	Ref<Texture2D> tex;
+	if (base.is_valid()) {
+		tex = base->get_texture(BaseMaterial3D::TEXTURE_ALBEDO);
+	} else {
+		shader_param = _shader_albedo_uniform(shader_mat->get_shader());
+		if (shader_param == StringName()) {
+			return;
+		}
+		tex = shader_mat->get_shader_parameter(shader_param);
+	}
 	if (tex.is_null() || Object::cast_to<PSXTexture>(tex.ptr())) {
 		// None, already baked (a material shared by several surfaces), or an
 		// image file imported as PSX Texture, which keeps its own settings.
@@ -86,8 +152,18 @@ void PSXSceneImportPlugin::internal_process(InternalImportCategory p_category, N
 	const int max_colors = colors_own >= -1 ? colors_own : (int)scene("psx/max_colors", -1);
 	const int dither_own = own("psx/dither", -2);
 	const int dither = dither_own >= -1 ? dither_own : (int)scene("psx/dither", -1);
-	// Cut-outs are baked at the material's own threshold, so they always match.
-	const float cut = mat->get_transparency() == BaseMaterial3D::TRANSPARENCY_ALPHA_SCISSOR ? mat->get_alpha_scissor_threshold() : 0.5f;
+	// Cut-outs are baked at the material's own threshold, so they always
+	// match: a shader's alpha_scissor_threshold uniform, as the renderer
+	// reads it, else 0.5 (its default).
+	float cut = 0.5f;
+	if (base.is_valid()) {
+		cut = base->get_transparency() == BaseMaterial3D::TRANSPARENCY_ALPHA_SCISSOR ? base->get_alpha_scissor_threshold() : 0.5f;
+	} else {
+		const Variant v = shader_mat->get_shader_parameter("alpha_scissor_threshold");
+		if (v.get_type() == Variant::FLOAT) {
+			cut = CLAMP((float)v, 0.0f, 1.0f);
+		}
+	}
 	String palette_path = own("psx/palette", String());
 	if (palette_path.is_empty()) {
 		palette_path = scene("psx/palette", String());
@@ -105,7 +181,11 @@ void PSXSceneImportPlugin::internal_process(InternalImportCategory p_category, N
 		return;
 	}
 	baked->set_name(tex->get_name());
-	mat->set_texture(BaseMaterial3D::TEXTURE_ALBEDO, baked);
+	if (base.is_valid()) {
+		base->set_texture(BaseMaterial3D::TEXTURE_ALBEDO, baked);
+	} else {
+		shader_mat->set_shader_parameter(shader_param, baked);
+	}
 }
 
 #endif // TOOLS_ENABLED
