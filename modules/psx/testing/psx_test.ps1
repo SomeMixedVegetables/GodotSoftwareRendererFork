@@ -106,6 +106,9 @@ $PsxOffScenes = @('controls_off')
 # evicted and uploaded again every frame. Their override.cfg turns on
 # print_stats.
 $ExpectSettled = @('texture_stress')
+# Values the last PSX_TEXTURES line must report (its override.cfg turns on
+# print_stats): palettes share CLUTs, palette swaps share texels.
+$ExpectTextureStats = @{ 'palettes' = @{ 'cluts' = 5; 'shared' = 5 } }
 
 function Get-GoldenDir([string]$SceneName) {
 	if ($GoldenAliases.ContainsKey($SceneName)) { $SceneName = $GoldenAliases[$SceneName] }
@@ -340,6 +343,16 @@ function Invoke-Check([string]$SceneName) {
 		$settled = $tex.Count -eq 2 -and -not ($uploads | Where-Object { $_ -ne 0 })
 		Write-Result "PSX_CHECK scene=$SceneName image=textures_settled result=$(if ($settled) {'pass'} else {'fail'}) uploads=$($uploads -join ',') fallbacks=$($fallbacks -join ',')"
 		$results += $settled
+	}
+	if ($ExpectTextureStats.ContainsKey($SceneName)) {
+		$tex = @($s.psx_lines | Where-Object { $_ -match '^PSX_TEXTURES' } | Select-Object -Last 1)
+		foreach ($k in $ExpectTextureStats[$SceneName].Keys) {
+			$want = $ExpectTextureStats[$SceneName][$k]
+			$got = if ($tex.Count -and $tex[0] -match " $k=(\d+)") { [int]$Matches[1] } else { -1 }
+			$statOk = $got -eq $want
+			Write-Result "PSX_CHECK scene=$SceneName image=stat_$k result=$(if ($statOk) {'pass'} else {'fail'}) got=$got expected=$want"
+			$results += $statOk
+		}
 	}
 	if ($ExpectLines.ContainsKey($SceneName)) {
 		$want = $ExpectLines[$SceneName]

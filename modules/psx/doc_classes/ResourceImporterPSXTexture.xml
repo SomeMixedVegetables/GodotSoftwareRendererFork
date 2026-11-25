@@ -19,11 +19,17 @@
 		<member name="psx/depth" type="int" setter="" getter="" default="-1">
 			The colour depth: Auto (4-bit when 16 colours are enough, else 8-bit), 4-bit, 8-bit or 15-bit. Project Setting uses [member ProjectSettings.rendering/psx/textures/depth].
 		</member>
+		<member name="psx/dither" type="int" setter="" getter="" default="-1">
+			Ordered: an ordered (4x4 Bayer) dither where the texture loses colours, so smooth gradients blend instead of banding: on the choice of palette colour of 4-bit and 8-bit textures (by about the distance between neighbouring palette colours, at most eight 5-bit steps), and on the 8- to 5-bit step of 15-bit ones. The pattern is fixed to the texture's texels, so it moves with the surface; it is separate from the GPU's own screen dither ([member ProjectSettings.rendering/psx/dither]). A texture whose palette holds every one of its colours is not changed. Project Setting uses [member ProjectSettings.rendering/psx/textures/dither].
+		</member>
 		<member name="psx/max_colors" type="int" setter="" getter="" default="-1">
 			The most colours the palette may have, for 4-bit and 8-bit textures. 0 means the depth's own limit (16 or 256); -1 uses [member ProjectSettings.rendering/psx/textures/max_colors].
 		</member>
 		<member name="psx/max_size" type="int" setter="" getter="" default="0">
 			The largest side in texels, 8 to 256 (the PS1's texture page limit). Bigger images are scaled down. Project Setting uses [member ProjectSettings.rendering/psx/textures/max_size].
+		</member>
+		<member name="psx/palette" type="String" setter="" getter="" default="&quot;&quot;">
+			A [PSXPalette] resource to make the texture with. It replaces [member psx/depth] and [member psx/max_colors]: the texture is 4-bit or 8-bit by the palette's size and every texel takes its nearest colour. Textures made with one palette share its CLUT in texture memory, and materials can swap in another palette of the same size ([member PSXMaterial3D.psx_palette]). Reimport the texture after editing the palette.
 		</member>
 	</members>
 </class>

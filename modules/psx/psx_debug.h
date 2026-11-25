@@ -54,6 +54,9 @@ struct PSXDebug {
 		GLOBAL_DEF(PropertyInfo(Variant::INT, "rendering/psx/textures/max_size", PROPERTY_HINT_ENUM, "8:8,16:16,32:32,64:64,128:128,256:256"), 256);
 		GLOBAL_DEF(PropertyInfo(Variant::INT, "rendering/psx/textures/depth", PROPERTY_HINT_ENUM, "Auto,4-bit,8-bit,15-bit"), 0);
 		GLOBAL_DEF(PropertyInfo(Variant::INT, "rendering/psx/textures/max_colors", PROPERTY_HINT_RANGE, "0,256,1"), 0);
+		// Ordered dither where a texture loses colours (its palette, or the
+		// 8- to 5-bit step of 15-bit textures).
+		GLOBAL_DEF("rendering/psx/textures/dither", false);
 		// Texture memory in 1024 x 512 banks. 1 is the PS1: textures share
 		// VRAM's texture region and the least recently used are evicted when
 		// it is full. More banks (a GP0 extension) hold textures beyond it.
@@ -101,10 +104,10 @@ struct PSXDebug {
 		}
 	}
 
-	void report_textures(uint64_t p_frame, uint32_t p_textured, uint32_t p_windowed, uint32_t p_resident, uint32_t p_baked, uint32_t p_uploads, uint32_t p_fallbacks, uint32_t p_banks, uint32_t p_vram_free_percent) const {
+	void report_textures(uint64_t p_frame, uint32_t p_textured, uint32_t p_windowed, uint32_t p_resident, uint32_t p_baked, uint32_t p_uploads, uint32_t p_fallbacks, uint32_t p_banks, uint32_t p_vram_free_percent, uint32_t p_cluts, uint32_t p_shared) const {
 		if (print_stats) {
-			print_line(vformat("PSX_TEXTURES frame=%d textured_tris=%d windowed_tris=%d resident=%d baked=%d uploads=%d fallbacks=%d banks=%d vram_free=%d%%",
-					(int64_t)p_frame, p_textured, p_windowed, p_resident, p_baked, p_uploads, p_fallbacks, p_banks, p_vram_free_percent));
+			print_line(vformat("PSX_TEXTURES frame=%d textured_tris=%d windowed_tris=%d resident=%d baked=%d uploads=%d fallbacks=%d banks=%d vram_free=%d%% cluts=%d shared=%d",
+					(int64_t)p_frame, p_textured, p_windowed, p_resident, p_baked, p_uploads, p_fallbacks, p_banks, p_vram_free_percent, p_cluts, p_shared));
 		}
 	}
 

@@ -27,6 +27,7 @@
 #include "psx_core/psx_ot.h"
 #include "psx_core/psx_render.h"
 #include "psx_core/psx_texture.h"
+#include "psx_palette.h"
 #include "psx_settings.h"
 #include "psx_texture_resource.h"
 
@@ -92,6 +93,8 @@ struct PSXMaterialInfo {
 	// Blend every triangle at 50% (PSXMaterial3D psx_blend Half), instead
 	// of by its alpha.
 	bool semi_whole = false;
+	// PSXMaterial3D psx_palette: the PSXPalette's object ID, 0 = none.
+	uint64_t palette = 0;
 
 	uint32_t hash() const { // Of what is baked into converted meshes.
 		uint32_t h = hash_murmur3_one_32((uint32_t)cull);
@@ -105,6 +108,7 @@ struct PSXMaterialInfo {
 		h = hash_murmur3_one_float(uv_scale.y, h);
 		h = hash_murmur3_one_float(uv_offset.x, h);
 		h = hash_murmur3_one_float(uv_offset.y, h);
+		h = hash_murmur3_one_64(palette, h);
 		return hash_fmix32(h);
 	}
 };
@@ -278,7 +282,7 @@ struct PSXSceneSettings {
 	Color default_ambient = Color(0.2, 0.2, 0.2);
 	psx::LightingMode lighting = psx::LIGHTING_PS1;
 	float subdivide_size = 1.0f; // Metres; 0 = off
-	psx::TextureOptions texture; // max_size, depth, max_colors (alpha set per material)
+	psx::TextureOptions texture; // max_size, depth, max_colors, dither (alpha set per material)
 	// Texture banks (1024 x 512 each, bank 0 = VRAM); 0 = as many as needed.
 	uint32_t texture_banks = 0;
 	bool dither = true; // Unless a material says otherwise
@@ -293,6 +297,8 @@ struct PSXSceneStats {
 	uint32_t texture_fallbacks = 0; // Surfaces drawn untextured: no VRAM left
 	uint32_t textures_resident = 0;
 	uint32_t textures_baked = 0; // Resident textures that came from a PSXTexture (not converted)
+	uint32_t clut_slots = 0; // CLUTs in texture memory
+	uint32_t shared_slots = 0; // Uses of a CLUT or texel box beyond its first (shared palettes, swaps)
 	uint32_t vram_free_percent = 100; // Of all texture banks in use
 	uint32_t texture_banks = 1;
 	psx::DrawStats draw;
@@ -403,6 +409,15 @@ public:
 			free_cells += a.free_cells();
 		}
 		const uint64_t bank_cells = psx::VramAllocator::GRID_W * psx::VramAllocator::GRID_H;
+		for (const BankSlots &b : bank_slots) {
+			r_stats.clut_slots += b.cluts.size();
+			for (const KeyValue<uint64_t, SharedSlot> &kv : b.cluts) {
+				r_stats.shared_slots += kv.value.refs - 1;
+			}
+			for (const KeyValue<uint64_t, SharedSlot> &kv : b.boxes) {
+				r_stats.shared_slots += kv.value.refs - 1;
+			}
+		}
 		r_stats.texture_banks = MAX(1u, vram_banks.size());
 		r_stats.vram_free_percent = vram_banks.is_empty() ? 100 : (uint32_t)(free_cells * 100 / (bank_cells * vram_banks.size()));
 	}
@@ -495,6 +510,8 @@ private:
 		bool needs_semi_clut = false;
 		bool placed = false;
 		bool baked = false; // From a PSXTexture's baked data
+		// Keys of its texels and CLUTs in BankSlots.
+		uint64_t texel_key = 0, clut_key = 0, semi_key = 0, white_key = 0;
 		uint16_t bank = 0;
 		int32_t x = 0, y = 0, clut_x = 0, clut_y = 0, semi_x = -1, semi_y = 0, white_x = -1, white_y = 0;
 		psx::DrawTexture draw[4]; // Per blend mode
@@ -528,6 +545,20 @@ private:
 	// buffers at scale 1); banks 1.. are added while settings.texture_banks
 	// allows (0 = up to psx::MAX_TEXTURE_BANKS).
 	LocalVector<psx::VramAllocator> vram_banks;
+
+	// A CLUT or a box of texels in one bank, shared by every placed texture
+	// whose halfwords are the same: textures made with one PSXPalette share
+	// its CLUT, as PS1 games did, and palette swaps of a texture share its
+	// texels.
+	struct SharedSlot {
+		int32_t x = 0, y = 0;
+		uint32_t refs = 0;
+	};
+	struct BankSlots {
+		HashMap<uint64_t, SharedSlot> cluts;
+		HashMap<uint64_t, SharedSlot> boxes;
+	};
+	LocalVector<BankSlots> bank_slots; // One per vram_banks entry
 	psx::GPU *gpu = nullptr;
 
 	static int32_t _to_int32(double p_value) {
@@ -569,6 +600,7 @@ private:
 				const PSXMaterialOverrides o = PSXSettingsRegistry::get_material(material);
 				surface_mats[surface].dither = o.dither;
 				surface_mats[surface].no_subdivide = o.no_subdivide;
+				surface_mats[surface].palette = o.palette;
 				if (o.blend != PSXMaterialOverrides::BLEND_MATERIAL) {
 					// The PS1 mode replaces Godot's transparency; a texture's
 					// alpha still cuts holes.
@@ -1029,11 +1061,22 @@ private:
 		if (!p_mat.texture.is_valid() || !ts->owns_texture(p_mat.texture) || p_src.uvs.is_empty()) {
 			return nullptr;
 		}
-		// Baked at import (PSXTexture): used whole, exactly as imported.
-		const uint32_t baked_version = PSXTexture::get_baked_version(p_mat.texture, p_mat.alpha_mode, p_mat.alpha_cut);
+		// The material's palette (PSXMaterial3D psx_palette), if it has one.
+		PSXPaletteData pal;
+		if (p_mat.palette == 0 || !PSXPalette::find(ObjectID(p_mat.palette), pal)) {
+			pal = PSXPaletteData();
+		}
+		// Baked at import (PSXTexture): used whole, exactly as imported. With
+		// a palette, only when it was baked with a palette of the same size:
+		// the palette is swapped in. Otherwise it is converted to the palette.
+		uint32_t baked_version = PSXTexture::get_baked_version(p_mat.texture, p_mat.alpha_mode, p_mat.alpha_cut);
+		if (baked_version != 0 && pal.version != 0 && PSXTexture::get_baked_palette_entries(p_mat.texture, p_mat.alpha_mode, p_mat.alpha_cut) != pal.entries) {
+			baked_version = 0;
+		}
 		TextureUse *use = nullptr;
 		if (baked_version != 0) {
-			const uint32_t h = hash_murmur3_one_32(baked_version, hash_murmur3_one_32(0xBA4Eu | (p_mat.semi ? 0x10000u : 0u) | (uint32_t)p_mat.alpha_mode << 20));
+			uint32_t h = hash_murmur3_one_32(baked_version, hash_murmur3_one_32(0xBA4Eu | (p_mat.semi ? 0x10000u : 0u) | (uint32_t)p_mat.alpha_mode << 20));
+			h = hash_murmur3_one_32(pal.version, h);
 			const uint64_t id = p_mat.texture.get_id();
 			const uint64_t key = ((uint64_t)hash_murmur3_one_64(id, h) << 32) | (id & 0xFFFFFFFFu);
 			use = texture_uses.getptr(key);
@@ -1042,12 +1085,15 @@ private:
 				psx::TextureData data;
 				uint32_t version = 0;
 				use->valid = PSXTexture::find_baked(p_mat.texture, p_mat.alpha_mode, p_mat.alpha_cut, data, version);
+				if (use->valid && pal.version != 0) {
+					use->valid = psx::apply_palette(pal.keys.data(), (int32_t)pal.keys.size(), data);
+				}
 				if (use->valid) {
 					_store_texture(*use, std::move(data), p_mat.semi, true);
 				}
 			}
 		} else {
-			use = _converted_texture_use(ts, p_mat, p_src, r_stats);
+			use = _converted_texture_use(ts, p_mat, p_src, pal, r_stats);
 			if (!use) {
 				return nullptr;
 			}
@@ -1086,12 +1132,24 @@ private:
 			e.data = std::move(p_data);
 			e.needs_semi_clut = p_semi;
 			e.baked = p_baked;
+			const psx::TextureData &d = e.data;
+			e.texel_key = _slot_key(d.texels, (uint32_t)d.hw_width() | (uint32_t)d.height << 16);
+			e.clut_key = _slot_key(d.clut, 1);
+			e.semi_key = _slot_key(d.clut_semi, 1);
+			e.white_key = _slot_key(d.clut_white, 1);
 		}
+	}
+
+	static uint64_t _slot_key(const std::vector<uint16_t> &p_halfwords, uint32_t p_shape) {
+		const int bytes = (int)(p_halfwords.size() * sizeof(uint16_t));
+		const uint32_t a = hash_murmur3_buffer(p_halfwords.data(), bytes, hash_murmur3_one_32(p_shape));
+		const uint32_t b = hash_murmur3_buffer(p_halfwords.data(), bytes, hash_murmur3_one_32(p_shape ^ 0x5bd1e995u));
+		return ((uint64_t)a << 32) | b;
 	}
 
 	// Runtime conversion: the image read back from the GPU, cropped to the
 	// UVs the surface uses. nullptr when the image cannot be read.
-	TextureUse *_converted_texture_use(RendererRD::TextureStorage *ts, const PSXMaterialInfo &p_mat, const SourceSurface &p_src, PSXSceneStats &r_stats) {
+	TextureUse *_converted_texture_use(RendererRD::TextureStorage *ts, const PSXMaterialInfo &p_mat, const SourceSurface &p_src, const PSXPaletteData &p_pal, PSXSceneStats &r_stats) {
 		const Ref<Image> image = _source_image(ts, p_mat.texture);
 		if (image.is_null()) {
 			return nullptr;
@@ -1125,7 +1183,8 @@ private:
 		h = hash_murmur3_one_float(p_mat.alpha_mode == psx::ALPHA_CUT ? p_mat.alpha_cut : 0.0f, h);
 		h = hash_murmur3_one_32((uint32_t)start[0] | (uint32_t)start[1] << 16, h);
 		h = hash_murmur3_one_32((uint32_t)extent[0] | (uint32_t)extent[1] << 16, h);
-		h = hash_murmur3_one_32((uint32_t)settings.texture.max_size | (uint32_t)settings.texture.depth << 16 | (uint32_t)settings.texture.max_colors << 20, h);
+		h = hash_murmur3_one_32((uint32_t)settings.texture.max_size | (uint32_t)settings.texture.depth << 16 | (uint32_t)settings.texture.max_colors << 20 | (settings.texture.dither ? 1u << 30 : 0u), h);
+		h = hash_murmur3_one_32(p_pal.version, h);
 		const uint64_t id = p_mat.texture.get_id();
 		const uint64_t key = ((uint64_t)hash_murmur3_one_64(id, h) << 32) | (id & 0xFFFFFFFFu);
 		const uint64_t version = ts->texture_get_content_version(p_mat.texture);
@@ -1143,7 +1202,7 @@ private:
 		{
 			use->version = version;
 			psx::TextureData data;
-			use->valid = _convert_texture(image, Rect2i(start[0], start[1], extent[0], extent[1]), p_mat, ts->texture_is_render_target(p_mat.texture), data);
+			use->valid = _convert_texture(image, Rect2i(start[0], start[1], extent[0], extent[1]), p_mat, ts->texture_is_render_target(p_mat.texture), p_pal, data);
 			r_stats.conversions++;
 			if (use->valid) {
 				for (int a = 0; a < 2; a++) {
@@ -1208,11 +1267,15 @@ private:
 	// p_dynamic: a render target, converted again every frame it changes:
 	// 15-bit (no palette to build), as a PS1 game would copy a rendered
 	// image from the frame buffer.
-	bool _convert_texture(const Ref<Image> &p_image, const Rect2i &p_crop, const PSXMaterialInfo &p_mat, bool p_dynamic, psx::TextureData &r_data) const {
+	bool _convert_texture(const Ref<Image> &p_image, const Rect2i &p_crop, const PSXMaterialInfo &p_mat, bool p_dynamic, const PSXPaletteData &p_pal, psx::TextureData &r_data) const {
 		const Ref<Image> crop = (p_crop.position == Point2i() && p_crop.size == p_image->get_size()) ? p_image : p_image->get_region(p_crop);
 		psx::TextureOptions opt = settings.texture;
 		if (p_dynamic) {
 			opt.depth = psx::DEPTH_FORCE_15BIT;
+		} else if (p_pal.version != 0) {
+			opt.palette = p_pal.keys.data();
+			opt.palette_size = (int32_t)p_pal.keys.size();
+			opt.palette_entries = p_pal.entries;
 		}
 		opt.alpha_mode = p_mat.alpha_mode;
 		opt.alpha_cut = p_mat.alpha_cut;
@@ -1222,15 +1285,20 @@ private:
 
 	// Finds room for a texture and its CLUTs (the palette; the all-STP one
 	// for blended materials; the all-white one for the fog pass of
-	// cut-outs) in one bank, adding banks while allowed, then evicting.
+	// cut-outs) in one bank, adding banks while allowed, then evicting. A
+	// bank already holding the same texels (a palette swap of a placed
+	// texture) is tried first; identical CLUTs and texels share one slot.
 	void _place_texture(TextureEntry &e, PSXSceneStats &r_stats) {
-		const psx::TextureData &d = e.data;
-		const int32_t entries = d.clut_entries();
 		const uint32_t max_banks = settings.texture_banks == 0 ? psx::MAX_TEXTURE_BANKS + 1 : MIN(settings.texture_banks, psx::MAX_TEXTURE_BANKS + 1);
 		if (vram_banks.is_empty()) {
 			vram_banks.resize(1);
 		}
 		for (;;) {
+			for (uint32_t bank = 0; bank < bank_slots.size() && bank < vram_banks.size(); bank++) {
+				if (bank_slots[bank].boxes.has(e.texel_key) && _place_in(e, bank, r_stats)) {
+					return;
+				}
+			}
 			for (uint32_t bank = 0; bank <= vram_banks.size(); bank++) {
 				if (bank == vram_banks.size()) {
 					if (bank >= max_banks) {
@@ -1238,48 +1306,8 @@ private:
 					}
 					vram_banks.push_back(psx::VramAllocator()); // A new, empty bank.
 				}
-				psx::VramAllocator &a = vram_banks[bank];
-				int32_t x = 0, y = 0, cx = 0, cy = 0, sx = -1, sy = 0, wx = -1, wy = 0;
-				const bool box = a.alloc(d.hw_width(), d.height, x, y);
-				const bool clut = box && (entries == 0 || a.alloc_clut(entries, cx, cy));
-				const bool semi = clut && (entries == 0 || !e.needs_semi_clut || a.alloc_clut(entries, sx, sy));
-				const bool white = semi && (entries == 0 || !d.has_transparent || a.alloc_clut(entries, wx, wy));
-				if (white) {
-					const uint16_t b = (uint16_t)bank;
-					psx::upload_rect(*gpu, x, y, d.hw_width(), d.height, d.texels.data(), b);
-					if (entries > 0) {
-						psx::upload_rect(*gpu, cx, cy, entries, 1, d.clut.data(), b);
-						if (sx >= 0) {
-							psx::upload_rect(*gpu, sx, sy, entries, 1, d.clut_semi.data(), b);
-						}
-						if (wx >= 0) {
-							psx::upload_rect(*gpu, wx, wy, entries, 1, d.clut_white.data(), b);
-						}
-					}
-					e.placed = true;
-					e.bank = b;
-					e.x = x;
-					e.y = y;
-					e.clut_x = cx;
-					e.clut_y = cy;
-					e.semi_x = sx;
-					e.semi_y = sy;
-					e.white_x = wx;
-					e.white_y = wy;
-					for (int mode = 0; mode < 4; mode++) {
-						e.draw[mode] = psx::make_draw_texture(d, x, y, cx, cy, sx, sy, wx, wy, (uint8_t)mode, true, b);
-					}
-					r_stats.texture_uploads++;
+				if (_place_in(e, bank, r_stats)) {
 					return;
-				}
-				if (semi && sx >= 0) {
-					a.free_clut(sx, sy, entries);
-				}
-				if (clut && entries > 0) {
-					a.free_clut(cx, cy, entries);
-				}
-				if (box) {
-					a.free(x, y, d.hw_width(), d.height);
 				}
 			}
 			if (!_evict_one_texture()) {
@@ -1288,6 +1316,88 @@ private:
 				return;
 			}
 		}
+	}
+
+	bool _place_in(TextureEntry &e, uint32_t p_bank, PSXSceneStats &r_stats) {
+		const psx::TextureData &d = e.data;
+		const int32_t entries = d.clut_entries();
+		if (bank_slots.size() < vram_banks.size()) {
+			bank_slots.resize(vram_banks.size());
+		}
+		int32_t x = 0, y = 0, cx = 0, cy = 0, sx = -1, sy = 0, wx = -1, wy = 0;
+		const bool box = _acquire_slot(p_bank, false, e.texel_key, d.hw_width(), d.height, d.texels.data(), x, y);
+		const bool clut = box && (entries == 0 || _acquire_slot(p_bank, true, e.clut_key, entries, 1, d.clut.data(), cx, cy));
+		const bool semi = clut && (entries == 0 || !e.needs_semi_clut || _acquire_slot(p_bank, true, e.semi_key, entries, 1, d.clut_semi.data(), sx, sy));
+		const bool white = semi && (entries == 0 || !d.has_transparent || _acquire_slot(p_bank, true, e.white_key, entries, 1, d.clut_white.data(), wx, wy));
+		if (!white) {
+			if (semi && sx >= 0) {
+				_release_slot(p_bank, true, e.semi_key, entries, 1);
+			}
+			if (clut && entries > 0) {
+				_release_slot(p_bank, true, e.clut_key, entries, 1);
+			}
+			if (box) {
+				_release_slot(p_bank, false, e.texel_key, d.hw_width(), d.height);
+			}
+			return false;
+		}
+		const uint16_t b = (uint16_t)p_bank;
+		e.placed = true;
+		e.bank = b;
+		e.x = x;
+		e.y = y;
+		e.clut_x = cx;
+		e.clut_y = cy;
+		e.semi_x = sx;
+		e.semi_y = sy;
+		e.white_x = wx;
+		e.white_y = wy;
+		for (int mode = 0; mode < 4; mode++) {
+			e.draw[mode] = psx::make_draw_texture(d, x, y, cx, cy, sx, sy, wx, wy, (uint8_t)mode, true, b);
+		}
+		r_stats.texture_uploads++;
+		return true;
+	}
+
+	// The slot of p_data in bank p_bank: one already holding the same
+	// halfwords, or new room, uploaded. p_width is the CLUT's entries for a
+	// CLUT, halfwords for texels.
+	bool _acquire_slot(uint32_t p_bank, bool p_clut, uint64_t p_key, int32_t p_width, int32_t p_height, const uint16_t *p_data, int32_t &r_x, int32_t &r_y) {
+		HashMap<uint64_t, SharedSlot> &slots = p_clut ? bank_slots[p_bank].cluts : bank_slots[p_bank].boxes;
+		SharedSlot *found = slots.getptr(p_key);
+		if (found) {
+			found->refs++;
+			r_x = found->x;
+			r_y = found->y;
+			return true;
+		}
+		psx::VramAllocator &a = vram_banks[p_bank];
+		if (!(p_clut ? a.alloc_clut(p_width, r_x, r_y) : a.alloc(p_width, p_height, r_x, r_y))) {
+			return false;
+		}
+		psx::upload_rect(*gpu, r_x, r_y, p_width, p_height, p_data, (uint16_t)p_bank);
+		SharedSlot &slot = slots.insert(p_key, SharedSlot())->value;
+		slot.x = r_x;
+		slot.y = r_y;
+		slot.refs = 1;
+		return true;
+	}
+
+	void _release_slot(uint32_t p_bank, bool p_clut, uint64_t p_key, int32_t p_width, int32_t p_height) {
+		if (p_bank >= bank_slots.size() || p_bank >= vram_banks.size()) {
+			return;
+		}
+		HashMap<uint64_t, SharedSlot> &slots = p_clut ? bank_slots[p_bank].cluts : bank_slots[p_bank].boxes;
+		SharedSlot *found = slots.getptr(p_key);
+		if (!found || --found->refs > 0) {
+			return;
+		}
+		if (p_clut) {
+			vram_banks[p_bank].free_clut(found->x, found->y, p_width);
+		} else {
+			vram_banks[p_bank].free(found->x, found->y, p_width, p_height);
+		}
+		slots.erase(p_key);
 	}
 
 	// Frees the least recently used texture that this frame has not drawn.
@@ -1311,16 +1421,15 @@ private:
 			e.placed = false;
 			return;
 		}
-		psx::VramAllocator &a = vram_banks[e.bank];
 		const int32_t entries = e.data.clut_entries();
-		a.free(e.x, e.y, e.data.hw_width(), e.data.height);
+		_release_slot(e.bank, false, e.texel_key, e.data.hw_width(), e.data.height);
 		if (entries > 0) {
-			a.free_clut(e.clut_x, e.clut_y, entries);
+			_release_slot(e.bank, true, e.clut_key, entries, 1);
 			if (e.semi_x >= 0) {
-				a.free_clut(e.semi_x, e.semi_y, entries);
+				_release_slot(e.bank, true, e.semi_key, entries, 1);
 			}
 			if (e.white_x >= 0) {
-				a.free_clut(e.white_x, e.white_y, entries);
+				_release_slot(e.bank, true, e.white_key, entries, 1);
 			}
 		}
 		e.placed = false;

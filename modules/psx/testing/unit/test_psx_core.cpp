@@ -22,6 +22,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <string>
+#include <algorithm>
 #include <vector>
 
 using namespace psx;
@@ -763,6 +764,222 @@ static void test_convert_texture() {
 	CHECK_EQ(texel_index(t, 1, 0), 0x8000);
 
 	CHECK(!convert_texture(nullptr, 0, 0, opt, t));
+}
+
+static void test_palettes() {
+	// make_palette: every opaque pixel of all sources together; transparent
+	// ones are left out.
+	const std::vector<uint8_t> a = rgba_image(8, 8, [](int x, int) -> uint32_t {
+		return x < 4 ? 0xFF0000FFu : 0x00FFFFFFu; // Red, then transparent white
+	});
+	const std::vector<uint8_t> b = rgba_image(8, 8, [](int x, int) -> uint32_t {
+		return x < 4 ? 0xFF00FF00u : 0xFF000000u; // Green, black
+	});
+	PaletteSource sources[2];
+	sources[0].rgba = a.data();
+	sources[0].width = 8;
+	sources[0].height = 8;
+	sources[1].rgba = b.data();
+	sources[1].width = 8;
+	sources[1].height = 8;
+	std::vector<uint16_t> pal;
+	CHECK(make_palette(sources, 2, 15, pal));
+	CHECK_EQ((int)pal.size(), 3); // Black, red, green; no white
+	CHECK(std::find(pal.begin(), pal.end(), (uint16_t)0x001F) != pal.end());
+	CHECK(std::find(pal.begin(), pal.end(), (uint16_t)0x03E0) != pal.end());
+	CHECK(std::find(pal.begin(), pal.end(), (uint16_t)0x7FFF) == pal.end());
+	// Too many colours: the median cut keeps the limit.
+	const std::vector<uint8_t> grad = rgba_image(32, 32, [](int x, int y) -> uint32_t {
+		return 0xFF000000u | (uint32_t)(x * 8) | ((uint32_t)(y * 8) << 8);
+	});
+	PaletteSource g;
+	g.rgba = grad.data();
+	g.width = 32;
+	g.height = 32;
+	CHECK(make_palette(&g, 1, 15, pal));
+	CHECK_EQ((int)pal.size(), 15);
+
+	// convert_texture with a fixed palette: 4-bit for 16 entries, entry 0
+	// transparent even without cut-outs, entry i + 1 = palette[i], texels
+	// take the nearest colour, and the CLUT depends only on the palette.
+	const uint16_t fixed[3] = { 0x0000, 0x001F, 0x7C00 }; // Black, red, blue
+	TextureOptions opt;
+	opt.palette = fixed;
+	opt.palette_size = 3;
+	opt.palette_entries = 16;
+	opt.depth = DEPTH_FORCE_15BIT; // Not used with a palette
+	const std::vector<uint8_t> near_red = rgba_image(8, 8, [](int x, int) -> uint32_t {
+		return x < 4 ? 0xFF1010E0u : 0xFFF01010u; // Nearly red, nearly blue
+	});
+	TextureData t, u;
+	CHECK(convert_texture(near_red.data(), 8, 8, opt, t));
+	CHECK_EQ(t.depth, TEXTURE_4BIT);
+	CHECK(t.shared_palette);
+	CHECK(!t.has_transparent);
+	CHECK_EQ(t.clut[0], 0);
+	CHECK_EQ(t.clut[1], 0x8000); // Opaque black
+	CHECK_EQ(t.clut[2], 0x001F);
+	CHECK_EQ(t.clut[3], 0x7C00);
+	CHECK_EQ(t.clut[4], 0); // Unused
+	CHECK_EQ(texel_index(t, 0, 0), 2);
+	CHECK_EQ(texel_index(t, 7, 0), 3);
+	CHECK(convert_texture(grad.data(), 32, 32, opt, u));
+	CHECK(t.clut == u.clut && t.clut_semi == u.clut_semi && t.clut_white == u.clut_white);
+
+	// Half alpha in a blended material becomes opaque (no STP in palettes);
+	// below a quarter stays transparent at index 0.
+	const std::vector<uint8_t> glass = rgba_image(8, 8, [](int x, int) -> uint32_t {
+		return x < 4 ? 0x800000FFu : 0x100000FFu;
+	});
+	opt.alpha_mode = ALPHA_BLEND;
+	CHECK(convert_texture(glass.data(), 8, 8, opt, t));
+	CHECK(!t.has_semi);
+	CHECK(t.has_transparent);
+	CHECK_EQ(texel_index(t, 0, 0), 2);
+	CHECK_EQ(texel_index(t, 7, 0), 0);
+	opt.alpha_mode = ALPHA_IGNORE;
+
+	// 256 entries: 8-bit.
+	opt.palette_entries = 256;
+	CHECK(convert_texture(near_red.data(), 8, 8, opt, t));
+	CHECK_EQ(t.depth, TEXTURE_8BIT);
+	CHECK_EQ((int)t.clut.size(), 256);
+	opt.palette_entries = 16;
+
+	// apply_palette: a swap keeps the texels and replaces the colours.
+	CHECK(convert_texture(near_red.data(), 8, 8, opt, t));
+	const std::vector<uint16_t> texels = t.texels;
+	const uint16_t swap[3] = { 0x7FFF, 0x03E0, 0x0000 }; // White, green, black
+	CHECK(apply_palette(swap, 3, t));
+	CHECK(t.texels == texels);
+	CHECK_EQ(t.clut[2], 0x03E0);
+	CHECK_EQ(t.clut[3], 0x8000);
+	CHECK_EQ(t.clut_semi[2], 0x83E0);
+	CHECK_EQ(t.clut_white[1], 0xFFFF);
+	// Not for textures with their own palette, nor palettes too big.
+	TextureOptions own;
+	CHECK(convert_texture(near_red.data(), 8, 8, own, u));
+	CHECK(!u.shared_palette);
+	CHECK(!apply_palette(swap, 3, u));
+	std::vector<uint16_t> big(16, 0x0001);
+	CHECK(!apply_palette(big.data(), 16, t));
+
+	// The flag survives the baked format.
+	std::vector<BakedTexture> baked(1);
+	baked[0].data = t;
+	std::vector<uint8_t> bytes;
+	write_baked_textures(baked, bytes);
+	std::vector<BakedTexture> back;
+	CHECK(read_baked_textures(bytes.data(), bytes.size(), back));
+	CHECK(back.size() == 1 && back[0].data.shared_palette);
+}
+
+static void test_texture_dither() {
+	// 15-bit: a flat grey halfway between two 5-bit levels (136 = 16.53
+	// steps) rounds to 17 everywhere without dither, and splits about
+	// evenly between 16 and 17 with it, the same at every 4x4 tile.
+	const std::vector<uint8_t> grey = rgba_image(8, 8, [](int, int) -> uint32_t {
+		return 0xFF888888u;
+	});
+	TextureOptions opt;
+	opt.depth = DEPTH_FORCE_15BIT;
+	TextureData t;
+	CHECK(convert_texture(grey.data(), 8, 8, opt, t));
+	for (uint16_t v : t.texels) {
+		CHECK_EQ(v & 31, 17);
+	}
+	opt.dither = true;
+	CHECK(convert_texture(grey.data(), 8, 8, opt, t));
+	int low = 0;
+	for (int y = 0; y < 8; y++) {
+		for (int x = 0; x < 8; x++) {
+			const uint16_t v = t.texels[y * 8 + x];
+			CHECK((v & 31) == 16 || (v & 31) == 17);
+			CHECK_EQ(v & 31, (v >> 5) & 31); // Same offset on every channel
+			CHECK_EQ(v, t.texels[(y & 3) * 8 + (x & 3)]); // Locked to the 4x4 grid
+			low += (v & 31) == 16 ? 1 : 0;
+		}
+	}
+	CHECK(low >= 24 && low <= 40);
+	// White stays white (the offset saturates).
+	const std::vector<uint8_t> white = rgba_image(8, 8, [](int, int) -> uint32_t {
+		return 0xFFFFFFFFu;
+	});
+	CHECK(convert_texture(white.data(), 8, 8, opt, t));
+	for (uint16_t v : t.texels) {
+		CHECK_EQ(v, 0x7FFF);
+	}
+
+	// A fixed palette of two greys 8 steps apart: the grey between them is
+	// one colour without dither and a mix of both with it; transparent
+	// texels stay index 0.
+	const uint16_t bw[2] = { 12 * 0x0421, 20 * 0x0421 };
+	const std::vector<uint8_t> mid = rgba_image(8, 8, [](int x, int) -> uint32_t {
+		return x == 0 ? 0x00000000u : 0xFF848484u; // 16 steps
+	});
+	TextureOptions pal;
+	pal.palette = bw;
+	pal.palette_size = 2;
+	pal.alpha_mode = ALPHA_CUT;
+	CHECK(convert_texture(mid.data(), 8, 8, pal, t));
+	int black = 0, white_n = 0;
+	for (int y = 0; y < 8; y++) {
+		for (int x = 1; x < 8; x++) {
+			black += texel_index(t, x, y) == 1 ? 1 : 0;
+		}
+	}
+	CHECK(black == 0 || black == 56);
+	pal.dither = true;
+	CHECK(convert_texture(mid.data(), 8, 8, pal, t));
+	black = 0;
+	for (int y = 0; y < 8; y++) {
+		CHECK_EQ(texel_index(t, 0, y), 0);
+		for (int x = 1; x < 8; x++) {
+			const int i = texel_index(t, x, y);
+			black += i == 1 ? 1 : 0;
+			white_n += i == 2 ? 1 : 0;
+		}
+	}
+	CHECK_EQ(black + white_n, 56);
+	CHECK(black >= 14 && white_n >= 14);
+	// Black and white, far apart: the offset stops at eight steps, so a dark
+	// grey stays black instead of speckling with white.
+	const uint16_t far[2] = { 0x0000, 0x7FFF };
+	const std::vector<uint8_t> dark = rgba_image(8, 8, [](int, int) -> uint32_t {
+		return 0xFF212121u; // 4 steps
+	});
+	pal.palette = far;
+	CHECK(convert_texture(dark.data(), 8, 8, pal, t));
+	for (int y = 0; y < 8; y++) {
+		for (int x = 0; x < 8; x++) {
+			CHECK_EQ(texel_index(t, x, y), 1);
+		}
+	}
+
+	// A palette that holds every colour is not dithered.
+	const std::vector<uint8_t> three = rgba_image(8, 8, [](int x, int) -> uint32_t {
+		return x < 3 ? 0xFF0000FFu : (x < 6 ? 0xFF00FF00u : 0xFF888888u);
+	});
+	TextureOptions own;
+	TextureData plain, dith;
+	CHECK(convert_texture(three.data(), 8, 8, own, plain));
+	own.dither = true;
+	CHECK(convert_texture(three.data(), 8, 8, own, dith));
+	CHECK(plain.texels == dith.texels && plain.clut == dith.clut);
+
+	// Too many colours for the palette: dithered, and the same each time.
+	const std::vector<uint8_t> grad = rgba_image(32, 32, [](int x, int y) -> uint32_t {
+		return 0xFF000000u | (uint32_t)(x * 8) | ((uint32_t)(y * 8) << 8);
+	});
+	own.max_colors = 4;
+	own.dither = false;
+	CHECK(convert_texture(grad.data(), 32, 32, own, plain));
+	own.dither = true;
+	CHECK(convert_texture(grad.data(), 32, 32, own, dith));
+	CHECK(plain.clut == dith.clut);
+	CHECK(plain.texels != dith.texels);
+	CHECK(convert_texture(grad.data(), 32, 32, own, t));
+	CHECK(t.texels == dith.texels);
 }
 
 static void test_baked_textures() {
@@ -1666,6 +1883,8 @@ int main(int argc, char **argv) {
 		{ "subdivide_and_point_lights", test_subdivide_and_point_lights },
 		{ "convert_texture", test_convert_texture },
 		{ "baked_textures", test_baked_textures },
+		{ "palettes", test_palettes },
+		{ "texture_dither", test_texture_dither },
 		{ "vram_allocator", test_vram_allocator },
 		{ "textured_mesh", test_textured_mesh },
 		{ "half_open_coverage", test_half_open_coverage },

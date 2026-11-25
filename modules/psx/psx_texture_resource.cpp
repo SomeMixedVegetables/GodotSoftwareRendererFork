@@ -53,7 +53,7 @@ void PSXTexture::_unregister() {
 	registered = RID();
 }
 
-Ref<PSXTexture> PSXTexture::bake(const Ref<Image> &p_image, int p_max_size, int p_depth, int p_max_colors, float p_alpha_cut, bool p_preview) {
+Ref<PSXTexture> PSXTexture::bake(const Ref<Image> &p_image, int p_max_size, int p_depth, int p_max_colors, float p_alpha_cut, bool p_preview, const Ref<PSXPalette> &p_palette, int p_dither) {
 	ERR_FAIL_COND_V(p_image.is_null() || p_image->is_empty(), Ref<PSXTexture>());
 	Ref<Image> image = p_image->duplicate();
 	if (image->is_compressed()) {
@@ -67,7 +67,16 @@ Ref<PSXTexture> PSXTexture::bake(const Ref<Image> &p_image, int p_max_size, int 
 	opt.max_size = CLAMP(p_max_size > 0 ? p_max_size : (int)GLOBAL_GET("rendering/psx/textures/max_size"), 8, 256);
 	opt.depth = (uint8_t)CLAMP(p_depth >= 0 ? p_depth : (int)GLOBAL_GET("rendering/psx/textures/depth"), 0, 3);
 	opt.max_colors = CLAMP(p_max_colors >= 0 ? p_max_colors : (int)GLOBAL_GET("rendering/psx/textures/max_colors"), 0, 256);
+	opt.dither = p_dither >= 0 ? p_dither > 0 : (bool)GLOBAL_GET("rendering/psx/textures/dither");
 	const float cut = CLAMP(p_alpha_cut, 0.0f, 1.0f);
+	PSXPaletteData palette;
+	if (p_palette.is_valid()) {
+		p_palette->get_data(palette);
+		ERR_FAIL_COND_V_MSG(palette.keys.empty(), Ref<PSXTexture>(), "PSX: the palette has no colours.");
+		opt.palette = palette.keys.data();
+		opt.palette_size = (int32_t)palette.keys.size();
+		opt.palette_entries = palette.entries;
+	}
 
 	// One variant per way a material can use alpha (only opaque when the
 	// image has none).
@@ -128,7 +137,7 @@ String PSXTexture::get_baked_summary() const {
 	}
 	const psx::TextureData &t = textures[0].data;
 	const char *depth = t.depth == psx::TEXTURE_4BIT ? "4-bit" : (t.depth == psx::TEXTURE_8BIT ? "8-bit" : "15-bit");
-	return vformat("%dx%d %s, %d colours, %d alpha variants", t.width, t.height, depth, t.colors, (int)textures.size());
+	return vformat("%dx%d %s, %d colours%s, %d alpha variants", t.width, t.height, depth, t.colors, t.shared_palette ? " (shared palette)" : "", (int)textures.size());
 }
 
 static const psx::BakedTexture *find_variant(const BakedEntry &p_entry, uint8_t p_alpha_mode, float p_alpha_cut) {
@@ -157,6 +166,14 @@ bool PSXTexture::find_baked(RID p_texture, uint8_t p_alpha_mode, float p_alpha_c
 	return true;
 }
 
+int32_t PSXTexture::get_baked_palette_entries(RID p_texture, uint8_t p_alpha_mode, float p_alpha_cut) {
+	BakedRegistry &r = registry();
+	MutexLock lock(r.mutex);
+	const BakedEntry *e = r.entries.getptr(p_texture);
+	const psx::BakedTexture *b = e ? find_variant(*e, p_alpha_mode, p_alpha_cut) : nullptr;
+	return (b && b->data.shared_palette) ? b->data.clut_entries() : 0;
+}
+
 uint32_t PSXTexture::get_baked_version(RID p_texture, uint8_t p_alpha_mode, float p_alpha_cut) {
 	BakedRegistry &r = registry();
 	MutexLock lock(r.mutex);
@@ -168,7 +185,7 @@ void PSXTexture::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("set_baked_data", "bytes"), &PSXTexture::set_baked_data);
 	ClassDB::bind_method(D_METHOD("get_baked_data"), &PSXTexture::get_baked_data);
 	ClassDB::bind_method(D_METHOD("get_baked_summary"), &PSXTexture::get_baked_summary);
-	ClassDB::bind_static_method("PSXTexture", D_METHOD("bake", "image", "max_size", "depth", "max_colors", "alpha_cut", "preview"), &PSXTexture::bake, DEFVAL(0), DEFVAL(-1), DEFVAL(-1), DEFVAL(0.5f), DEFVAL(true));
+	ClassDB::bind_static_method("PSXTexture", D_METHOD("bake", "image", "max_size", "depth", "max_colors", "alpha_cut", "preview", "palette", "dither"), &PSXTexture::bake, DEFVAL(0), DEFVAL(-1), DEFVAL(-1), DEFVAL(0.5f), DEFVAL(true), DEFVAL(Ref<PSXPalette>()), DEFVAL(-1));
 	ADD_PROPERTY(PropertyInfo(Variant::PACKED_BYTE_ARRAY, "baked_data", PROPERTY_HINT_NONE, "", PROPERTY_USAGE_STORAGE | PROPERTY_USAGE_INTERNAL), "set_baked_data", "get_baked_data");
 }
 

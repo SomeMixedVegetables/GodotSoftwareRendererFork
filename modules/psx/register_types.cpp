@@ -53,6 +53,7 @@ static PSX *psx_singleton = nullptr;
 
 void initialize_psx_module(ModuleInitializationLevel p_level) {
 	if (p_level == MODULE_INITIALIZATION_LEVEL_SCENE) {
+		GDREGISTER_CLASS(PSXPalette);
 		GDREGISTER_CLASS(PSXTexture);
 		GDREGISTER_CLASS(PSXSettings);
 		GDREGISTER_CLASS(PSXMaterial3D);

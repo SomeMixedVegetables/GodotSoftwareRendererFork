@@ -49,6 +49,23 @@ struct TextureOptions {
 	int32_t max_colors = 0;
 	uint8_t alpha_mode = ALPHA_IGNORE;
 	float alpha_cut = 0.5f;
+	// A fixed palette (PSXPalette) instead of one made for the image: its
+	// visible colours as 15-bit keys, at most palette_entries - 1 of them.
+	// CLUT entry 0 stays transparent and entry i + 1 is palette[i], so the
+	// CLUT is the same for every texture made with the palette and they
+	// share it in VRAM. The texture is 4-bit for 16 entries and 8-bit for
+	// 256 (depth and max_colors are not used); every texel takes its nearest
+	// colour, and half-transparent texels become opaque (the palette's
+	// colours carry no STP).
+	const uint16_t *palette = nullptr;
+	int32_t palette_size = 0;
+	int32_t palette_entries = 16;
+	// Ordered (4x4 Bayer) dither where colours are lost, locked to the
+	// texel grid: on the 8- to 5-bit step of 15-bit textures, and on the
+	// choice of palette entry of 4- and 8-bit ones, by about the distance
+	// between neighbouring palette colours (at most eight 5-bit steps). A palette that holds every
+	// colour of the image is not dithered.
+	bool dither = false;
 };
 
 struct TextureData {
@@ -63,6 +80,9 @@ struct TextureData {
 	bool has_semi = false; // Some texels have STP set
 	uint8_t mean[3] = { 128, 128, 128 }; // Average visible colour, sRGB 0..255
 	int32_t colors = 0; // Palette entries in use
+	// Made with a fixed palette: index i + 1 is the palette's colour i, so
+	// another palette of the same size can be swapped in (apply_palette).
+	bool shared_palette = false;
 
 	int32_t hw_width() const { return depth == TEXTURE_4BIT ? width / 4 : (depth == TEXTURE_8BIT ? width / 2 : width); }
 	int32_t clut_entries() const { return depth == TEXTURE_4BIT ? 16 : (depth == TEXTURE_8BIT ? 256 : 0); }
@@ -70,6 +90,24 @@ struct TextureData {
 
 // Returns false (r_texture empty) for an empty image.
 bool convert_texture(const uint8_t *p_rgba, int32_t p_width, int32_t p_height, const TextureOptions &p_options, TextureData &r_texture);
+
+// An image a palette is made from: RGBA8, p_width x p_height.
+struct PaletteSource {
+	const uint8_t *rgba = nullptr;
+	int32_t width = 0;
+	int32_t height = 0;
+};
+
+// A palette of up to p_colors 15-bit keys (sorted) for all the sources
+// together: the median cut over every pixel with alpha of at least 128.
+// Returns false (r_palette empty) when there are none.
+bool make_palette(const PaletteSource *p_sources, int32_t p_count, int32_t p_colors, std::vector<uint16_t> &r_palette);
+
+// A palette swap: replaces r_texture's CLUTs with p_palette's colours, as
+// convert_texture would build them. False (r_texture unchanged) when the
+// texture was not made with a fixed palette or p_count colours do not fit
+// its CLUT. Indices past p_count become transparent.
+bool apply_palette(const uint16_t *p_palette, int32_t p_count, TextureData &r_texture);
 
 // A texture converted ahead of time (the PSX Texture importer) for one way
 // a material can use its alpha.

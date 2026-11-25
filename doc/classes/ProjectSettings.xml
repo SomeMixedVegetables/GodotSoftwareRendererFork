@@ -3343,6 +3343,9 @@
 		<member name="rendering/psx/textures/depth" type="int" setter="" getter="" default="0">
 			The colour depth the PS1 renderer converts textures to: [b]Auto[/b] (4-bit when 16 colours are enough, else 8-bit with a generated palette), [b]4-bit[/b], [b]8-bit[/b] or [b]15-bit[/b]. Changing it converts the textures drawn next again. [PSXTexture]s keep the depth they were imported with.
 		</member>
+		<member name="rendering/psx/textures/dither" type="bool" setter="" getter="" default="false">
+			Textures the PS1 renderer converts when drawn get an ordered (4x4 Bayer) dither where the texture loses colours, so smooth gradients blend instead of banding: on the choice of palette colour of 4-bit and 8-bit textures (by about the distance between neighbouring palette colours, at most eight 5-bit steps), and on the 8- to 5-bit step of 15-bit ones. The pattern is fixed to the texture's texels, so it moves with the surface; it is separate from the GPU's own screen dither ([member ProjectSettings.rendering/psx/dither]). A texture whose palette holds every one of its colours is not changed. Changing it converts the textures drawn next again. [PSXTexture]s keep the dither they were imported with (the importers' [code]psx/dither[/code]).
+		</member>
 		<member name="rendering/psx/textures/max_colors" type="int" setter="" getter="" default="0">
 			The most colours a 4-bit or 8-bit texture's palette may have. 0 means the depth's own limit (16 or 256). Changing it converts the textures drawn next again.
 		</member>

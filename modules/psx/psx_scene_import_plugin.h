@@ -3,9 +3,10 @@
 // the scene is imported, so the PSX renderer does not convert it when drawn.
 //
 // Import dock (whole scene): psx/bake_textures turns it on; psx/max_size,
-// psx/depth, psx/max_colors and psx/ps1_preview work as in the PSX Texture
-// importer. Advanced Import Settings (per material): psx/bake (scene
-// setting, always, never) and overrides of size, depth and colours.
+// psx/depth, psx/max_colors, psx/dither, psx/palette and psx/ps1_preview
+// work as in the PSX Texture importer. Advanced Import Settings (per
+// material): psx/bake (scene setting, always, never) and overrides of
+// size, depth, colours, dither and palette.
 //
 // Embedded and extracted textures are both baked, as a copy saved in the
 // imported scene. An image file already imported as PSX Texture is left

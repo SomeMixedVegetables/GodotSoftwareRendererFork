@@ -22,6 +22,8 @@ static const PSXSettingDef SETTING_DEFS[PSX_SETTING_MAX] = {
 			"Colour depth of textures converted when drawn." },
 	{ "texture_max_colors", "rendering/psx/textures/max_colors", Variant::INT, PROPERTY_HINT_RANGE, "0,256,1", true,
 			"Palette limit of textures converted when drawn (0 = the depth's)." },
+	{ "texture_dither", "rendering/psx/textures/dither", Variant::BOOL, PROPERTY_HINT_NONE, "", true,
+			"Ordered dither where textures converted when drawn lose colours." },
 };
 
 const PSXSettingDef &psx_setting_def(int p_setting) {
@@ -57,6 +59,8 @@ Variant psx_setting_validate(int p_setting, const Variant &p_value) {
 			return CLAMP((int)p_value, 0, 3);
 		case PSX_SETTING_TEXTURE_MAX_COLORS:
 			return CLAMP((int)p_value, 0, 256);
+		case PSX_SETTING_TEXTURE_DITHER:
+			return (bool)p_value;
 		default:
 			return p_value;
 	}
@@ -248,6 +252,7 @@ PSXLiveSettings PSXSettingsRegistry::resolve(RID p_scenario) {
 	s.texture.max_size = v[PSX_SETTING_TEXTURE_MAX_SIZE];
 	s.texture.depth = (uint8_t)(int)v[PSX_SETTING_TEXTURE_DEPTH];
 	s.texture.max_colors = v[PSX_SETTING_TEXTURE_MAX_COLORS];
+	s.texture.dither = v[PSX_SETTING_TEXTURE_DITHER];
 	return s;
 }
 

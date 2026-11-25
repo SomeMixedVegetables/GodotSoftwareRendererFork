@@ -120,6 +120,7 @@ class PSXSceneRenderRD : public Base {
 		s.texture.max_size = CLAMP(p_live.texture.max_size, 8, 256);
 		s.texture.depth = (uint8_t)CLAMP((int)p_live.texture.depth, 0, 3);
 		s.texture.max_colors = CLAMP(p_live.texture.max_colors, 0, 256);
+		s.texture.dither = p_live.texture.dither;
 	}
 
 	void _ensure_frame_texture() {
@@ -253,7 +254,7 @@ public:
 		debug.report(frame_count, raster_usec, upload_usec, (int)p_instances.size(), (int)gpu->stats.triangles);
 		const psx::DrawStats &ds = scene_stats.draw;
 		debug.report_scene(frame_count, scene_stats.instances, scene_stats.surfaces, scene_stats.conversions, ds.triangles_in, ds.culled_near, ds.culled_backface, ds.culled_offscreen, ds.culled_far);
-		debug.report_textures(frame_count, ds.textured, ds.windowed, scene_stats.textures_resident, scene_stats.textures_baked, scene_stats.texture_uploads, scene_stats.texture_fallbacks, scene_stats.texture_banks, scene_stats.vram_free_percent);
+		debug.report_textures(frame_count, ds.textured, ds.windowed, scene_stats.textures_resident, scene_stats.textures_baked, scene_stats.texture_uploads, scene_stats.texture_fallbacks, scene_stats.texture_banks, scene_stats.vram_free_percent, scene_stats.clut_slots, scene_stats.shared_slots);
 		{
 			PSXFrameStats st;
 			st.frame = frame_count;

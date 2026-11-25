@@ -38,6 +38,7 @@ enum PSXSetting {
 	PSX_SETTING_TEXTURE_MAX_SIZE, // Rebuild
 	PSX_SETTING_TEXTURE_DEPTH, // Rebuild
 	PSX_SETTING_TEXTURE_MAX_COLORS, // Rebuild
+	PSX_SETTING_TEXTURE_DITHER, // Rebuild
 	PSX_SETTING_MAX
 };
 
@@ -102,7 +103,9 @@ struct PSXMaterialOverrides {
 	uint8_t dither = DITHER_DEFAULT;
 	bool no_subdivide = false;
 	uint8_t blend = BLEND_MATERIAL;
-	bool is_default() const { return dither == DITHER_DEFAULT && !no_subdivide && blend == BLEND_MATERIAL; }
+	// The PSXPalette to draw the texture with (its object ID), 0 = none.
+	uint64_t palette = 0;
+	bool is_default() const { return dither == DITHER_DEFAULT && !no_subdivide && blend == BLEND_MATERIAL && palette == 0; }
 };
 
 // The last frame the PSX renderer drew, for the dock and PSX.get_stats().

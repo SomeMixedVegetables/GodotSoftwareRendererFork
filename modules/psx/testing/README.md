@@ -37,6 +37,8 @@ window frames, `-Stats`, `-Dev`, `-ModelsDir <folder>`, `-ModelsPerCategory 2`.
 | `ortho` | An orthographic camera |
 | `overlay` | A ring on layer 21 (where the editor puts gizmos and the grid): Godot's renderer draws it over the PS1 frame, in the composite only. Run with `-Renderer mobile` to check the overlay on Mobile |
 | `particles` | Particle billboards on a MultiMesh with custom data (as CPUParticles3D makes them): each arrow turned by its custom data X, as in Godot |
+| `palettes` | PSXPalette: three textures baked with one generated 16-entry palette (one with cut-out holes), the first with the palette swapped per material (same, warm, grey), and a runtime texture converted to the palette next to one with its own. The check also reads `PSX_TEXTURES`: 5 CLUTs and 5 shared slots (one CLUT for the palette, texels shared by the swaps) |
+| `texture_dither` | Ordered texture dither: a gradient with an 8-colour palette, a dark gradient at 15-bit and a gradient with a fixed 4-colour PSXPalette, baked without (top) and with (middle) dither; runtime textures dithered by `rendering/psx/textures/dither` (bottom, set in its `.override.cfg`) |
 | `particles_anim` | Particle animation frames (a 4 x 2 sheet, frames picked by custom data Z, clamped and looped) and per-instance MultiMesh colours on a material that uses vertex colour |
 | `skinned` | A two-bone mesh built in code, bent every frame (CPU skinning) |
 | `sprites` | Sprite3D, AnimatedSprite3D and Label3D, with and without billboarding, and a billboard material |
@@ -86,7 +88,7 @@ uploads in each viewport's last frame).
 `/W4 /WX`) and runs it: trig, the UNR divide, RTPS/RTPT/NCLIP/AVSZ and FLAG,
 GTE lighting (NCS/NCCS/NCDS/DPCS), mesh conversion, subdivision, alpha
 classes, `draw_mesh` (culling, near/far, lighting modes, emission, fog,
-point lights), texture conversion (resampling, 4/8-bit palettes, alpha),
+point lights), texture conversion (resampling, 4/8-bit palettes, alpha, ordered dither),
 baked textures (round trip, refusing bad data, decoding), the VRAM allocator, textured meshes (tile shift, texture window, texture
 banks, the fog pass), coverage and fill rule, size limits and scaled VRAM, dither, blend modes,
 modulation, transparency, CLUTs, texture window, mask bit, fills and copies,
@@ -168,7 +170,7 @@ material's menu) can set dither On or Off and subdivision Off per material.
 | `dither` | None |
 | `lighting_mode`, `default_ambient` | None |
 | `world_scale`, `subdivide_size` | The meshes drawn are converted again (one-frame hitch) |
-| `texture_max_size`, `texture_depth`, `texture_max_colors` | The textures drawn are converted again (baked textures are not) |
+| `texture_max_size`, `texture_depth`, `texture_max_colors`, `texture_dither` | The textures drawn are converted again (baked textures are not) |
 
 Resolution, `vram_scale` and texture banks need a restart.
 

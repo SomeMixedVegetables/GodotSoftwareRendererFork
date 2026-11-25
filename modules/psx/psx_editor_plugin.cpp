@@ -43,6 +43,7 @@ const ProxyEntry PROXY_ENTRIES[] = {
 	{ "textures/max_size", "rendering/psx/textures/max_size", false },
 	{ "textures/depth", "rendering/psx/textures/depth", false },
 	{ "textures/max_colors", "rendering/psx/textures/max_colors", false },
+	{ "textures/dither", "rendering/psx/textures/dither", false },
 	{ "display_restart/resolution_width", "rendering/psx/resolution_width", true },
 	{ "display_restart/resolution_height", "rendering/psx/resolution_height", true },
 	{ "display_restart/vram_scale", "rendering/psx/vram_scale", true },

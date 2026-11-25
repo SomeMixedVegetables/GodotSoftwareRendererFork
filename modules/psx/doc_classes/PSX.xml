@@ -9,7 +9,7 @@
 		2. The [PSXSettings] node in the scene the viewport shows.
 		3. Overrides set through this singleton with [method set_setting].
 		A [PSXMaterial3D] can then turn dithering on or off and subdivision off for its own surfaces.
-		The setting names are [code]"active"[/code], [code]"dither"[/code], [code]"lighting_mode"[/code], [code]"default_ambient"[/code], [code]"world_scale"[/code], [code]"subdivide_size"[/code], [code]"texture_max_size"[/code], [code]"texture_depth"[/code] and [code]"texture_max_colors"[/code] (see [method get_setting_names]). The first four cost nothing to change. Changing the others makes the next frame convert the meshes or textures it draws again, a one-frame hitch. Resolution, VRAM scale and texture banks are not here: they need a restart.
+		The setting names are [code]"active"[/code], [code]"dither"[/code], [code]"lighting_mode"[/code], [code]"default_ambient"[/code], [code]"world_scale"[/code], [code]"subdivide_size"[/code], [code]"texture_max_size"[/code], [code]"texture_depth"[/code], [code]"texture_max_colors"[/code] and [code]"texture_dither"[/code] (see [method get_setting_names]). The first four cost nothing to change. Changing the others makes the next frame convert the meshes or textures it draws again, a one-frame hitch. Resolution, VRAM scale and texture banks are not here: they need a restart.
 		[codeblock]
 		# A graphics menu: PS1 look on or off, dithering on or off.
 		func _on_ps1_look_toggled(on):

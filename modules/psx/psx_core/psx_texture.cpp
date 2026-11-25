@@ -23,6 +23,36 @@ static uint32_t to5(uint32_t p_value) {
 	return (p_value * 31 + 127) / 255;
 }
 
+// 4x4 Bayer matrix, 0..15.
+static const uint8_t BAYER4[4][4] = {
+	{ 0, 8, 2, 10 },
+	{ 12, 4, 14, 6 },
+	{ 3, 11, 1, 9 },
+	{ 15, 7, 13, 5 },
+};
+
+// The dither offset at texel (x, y), in 8-bit units, for an amplitude of
+// p_amp16 / 16 5-bit steps: centred on 0, within +-amplitude / 2.
+static int32_t dither_offset(int32_t p_x, int32_t p_y, int32_t p_amp16) {
+	const int32_t num = (2 * (int32_t)BAYER4[p_y & 3][p_x & 3] + 1 - 16) * p_amp16 * 255;
+	const int32_t den = 32 * 31 * 16;
+	return num >= 0 ? (num + den / 2) / den : -((-num + den / 2) / den);
+}
+
+// An 8-bit channel plus a dither offset, to 5 bits.
+static uint32_t to5_dithered(uint32_t p_value, int32_t p_offset) {
+	const int32_t v = (int32_t)p_value + p_offset;
+	return to5((uint32_t)(v < 0 ? 0 : (v > 255 ? 255 : v)));
+}
+
+static int32_t isqrt(int64_t p_value) {
+	int64_t r = 0;
+	while ((r + 1) * (r + 1) <= p_value) {
+		r++;
+	}
+	return (int32_t)r;
+}
+
 namespace {
 
 // A texel after alpha classification: 15-bit colour plus the semi flag in
@@ -159,7 +189,10 @@ bool convert_texture(const uint8_t *p_rgba, int32_t p_width, int32_t p_height, c
 	// Resample to tw x th: area average when shrinking (colour weighted by
 	// alpha, so cut-out texels do not bleed), nearest when growing.
 	const bool use_alpha = p_options.alpha_mode != ALPHA_IGNORE;
+	const bool use_palette = p_options.palette && p_options.palette_size > 0;
 	std::vector<uint32_t> texel(tw * th);
+	// The resampled 8-bit colour (r | g << 8 | b << 16), for dithering.
+	std::vector<uint32_t> color8(p_options.dither ? tw * th : 0);
 	uint64_t mean_sum[3] = { 0, 0, 0 }, mean_count = 0;
 	for (int32_t ty = 0; ty < th; ty++) {
 		const int32_t y0 = (int32_t)((int64_t)ty * p_height / th);
@@ -193,7 +226,7 @@ bool convert_texture(const uint8_t *p_rgba, int32_t p_width, int32_t p_height, c
 					break;
 				case ALPHA_BLEND:
 					transparent = a8 <= 64;
-					semi = !transparent && a8 < 191;
+					semi = !transparent && a8 < 191 && !use_palette;
 					break;
 				default:
 					break;
@@ -209,6 +242,9 @@ bool convert_texture(const uint8_t *p_rgba, int32_t p_width, int32_t p_height, c
 			mean_count++;
 			const uint32_t key = to5(c8[0]) | (to5(c8[1]) << 5) | (to5(c8[2]) << 10) | (semi ? 0x8000u : 0u);
 			texel[ty * tw + tx] = key;
+			if (p_options.dither) {
+				color8[ty * tw + tx] = c8[0] | (c8[1] << 8) | (c8[2] << 16);
+			}
 			r_texture.has_semi = r_texture.has_semi || semi;
 		}
 	}
@@ -244,12 +280,12 @@ bool convert_texture(const uint8_t *p_rgba, int32_t p_width, int32_t p_height, c
 			hist.push_back({ (uint16_t)k, counts[k] });
 		}
 	}
-	const int32_t reserved = r_texture.has_transparent ? 1 : 0;
+	const int32_t reserved = (r_texture.has_transparent || use_palette) ? 1 : 0;
 	const int32_t unique = (int32_t)hist.size();
 	int32_t limit_colors = p_options.max_colors > 0 ? std::min(std::max(p_options.max_colors, 2), 256) : 256;
 
 	uint8_t depth = TEXTURE_8BIT;
-	switch (p_options.depth) {
+	switch (use_palette ? (p_options.palette_entries > 16 ? DEPTH_FORCE_8BIT : DEPTH_FORCE_4BIT) : p_options.depth) {
 		case DEPTH_FORCE_4BIT:
 			depth = TEXTURE_4BIT;
 			break;
@@ -265,10 +301,21 @@ bool convert_texture(const uint8_t *p_rgba, int32_t p_width, int32_t p_height, c
 	}
 	r_texture.depth = depth;
 
+	// texel[i] dithered by p_amp16 / 16 5-bit steps (semi flag kept).
+	auto dithered = [&](size_t p_i, int32_t p_amp16) -> uint32_t {
+		const int32_t off = dither_offset((int32_t)(p_i % tw), (int32_t)(p_i / tw), p_amp16);
+		const uint32_t c = color8[p_i];
+		return to5_dithered(c & 0xFF, off) | (to5_dithered((c >> 8) & 0xFF, off) << 5) | (to5_dithered((c >> 16) & 0xFF, off) << 10) | (texel[p_i] & 0x8000u);
+	};
+
 	if (depth == TEXTURE_15BIT) {
 		r_texture.texels.resize((size_t)tw * th);
 		for (size_t i = 0; i < texel.size(); i++) {
-			r_texture.texels[i] = texel[i] == TRANSPARENT ? 0 : texel_value(texel[i]);
+			if (texel[i] == TRANSPARENT) {
+				r_texture.texels[i] = 0;
+				continue;
+			}
+			r_texture.texels[i] = texel_value(p_options.dither ? dithered(i, 16) : texel[i]);
 		}
 		r_texture.colors = unique;
 		return true;
@@ -277,7 +324,12 @@ bool convert_texture(const uint8_t *p_rgba, int32_t p_width, int32_t p_height, c
 	const int32_t entries = depth == TEXTURE_4BIT ? 16 : 256;
 	const int32_t available = std::max(1, std::min(entries, limit_colors) - reserved);
 	std::vector<uint16_t> palette;
-	if (unique <= available) {
+	if (use_palette) {
+		r_texture.shared_palette = true;
+		for (int32_t i = 0; i < std::min(p_options.palette_size, entries - 1); i++) {
+			palette.push_back((uint16_t)(p_options.palette[i] & 0x7FFF));
+		}
+	} else if (unique <= available) {
 		for (const HistEntry &h : hist) {
 			palette.push_back(h.key);
 		}
@@ -285,12 +337,16 @@ bool convert_texture(const uint8_t *p_rgba, int32_t p_width, int32_t p_height, c
 		palette = median_cut(hist, available);
 	}
 	r_texture.colors = (int32_t)palette.size() + reserved;
+	const bool exact = !use_palette && unique <= available;
 
-	// Nearest palette entry for every colour in use (semi flag must match
-	// when the palette has an entry of that kind).
+	// Nearest palette entry for a colour key (semi flag must match when the
+	// palette has an entry of that kind), found once per key.
 	std::vector<int16_t> lookup(65536, -1);
-	for (const HistEntry &h : hist) {
-		const bool semi = (h.key & 0x8000) != 0;
+	auto nearest = [&](uint32_t p_key) -> uint32_t {
+		if (lookup[p_key] >= 0) {
+			return (uint32_t)lookup[p_key];
+		}
+		const bool semi = (p_key & 0x8000) != 0;
 		int best = -1;
 		int best_d = 1 << 30;
 		for (int pass = 0; pass < 2 && best < 0; pass++) {
@@ -300,7 +356,7 @@ bool convert_texture(const uint8_t *p_rgba, int32_t p_width, int32_t p_height, c
 				}
 				int d = 0;
 				for (int c = 0; c < 3; c++) {
-					const int diff = channel(h.key, c) - channel(palette[p], c);
+					const int diff = channel((uint16_t)p_key, c) - channel(palette[p], c);
 					d += diff * diff;
 				}
 				if (d < best_d) {
@@ -309,7 +365,34 @@ bool convert_texture(const uint8_t *p_rgba, int32_t p_width, int32_t p_height, c
 				}
 			}
 		}
-		lookup[h.key] = (int16_t)(best + reserved);
+		lookup[p_key] = (int16_t)(best + reserved);
+		return (uint32_t)lookup[p_key];
+	};
+
+	// Dither amplitude per channel (the offset moves every channel at once):
+	// the mean distance from each palette colour to its nearest neighbour
+	// over sqrt(3), so two greys a distance apart are bridged exactly; in
+	// 1/16 5-bit steps, from one step to eight (a sparse palette would
+	// otherwise speckle dark areas with its light colours).
+	int32_t amp16 = 0;
+	if (p_options.dither && !exact && palette.size() > 1) {
+		int64_t sum = 0;
+		for (size_t p = 0; p < palette.size(); p++) {
+			int64_t best = INT64_MAX;
+			for (size_t q = 0; q < palette.size(); q++) {
+				if (q == p) {
+					continue;
+				}
+				int64_t d = 0;
+				for (int c = 0; c < 3; c++) {
+					const int64_t diff = channel(palette[p], c) - channel(palette[q], c);
+					d += diff * diff;
+				}
+				best = d < best ? d : best;
+			}
+			sum += isqrt(best * 256 / 3);
+		}
+		amp16 = std::min<int32_t>(128, std::max<int32_t>(16, (int32_t)(sum / (int64_t)palette.size())));
 	}
 
 	r_texture.clut.assign(entries, 0);
@@ -328,11 +411,66 @@ bool convert_texture(const uint8_t *p_rgba, int32_t p_width, int32_t p_height, c
 	r_texture.texels.assign((size_t)hw * th, 0);
 	for (int32_t y = 0; y < th; y++) {
 		for (int32_t x = 0; x < tw; x++) {
-			const uint32_t t = texel[y * tw + x];
-			const uint32_t index = t == TRANSPARENT ? 0u : (uint32_t)lookup[t];
+			const size_t i = (size_t)y * tw + x;
+			const uint32_t t = texel[i];
+			const uint32_t index = t == TRANSPARENT ? 0u : nearest(amp16 > 0 ? dithered(i, amp16) : t);
 			r_texture.texels[(size_t)y * hw + x / per_hw] |= (uint16_t)(index << ((x % per_hw) * bits));
 		}
 	}
+	return true;
+}
+
+bool make_palette(const PaletteSource *p_sources, int32_t p_count, int32_t p_colors, std::vector<uint16_t> &r_palette) {
+	r_palette.clear();
+	std::vector<uint32_t> counts(32768, 0);
+	for (int32_t s = 0; s < p_count; s++) {
+		const PaletteSource &src = p_sources[s];
+		if (!src.rgba || src.width <= 0 || src.height <= 0) {
+			continue;
+		}
+		const size_t n = (size_t)src.width * src.height;
+		for (size_t i = 0; i < n; i++) {
+			const uint8_t *px = src.rgba + i * 4;
+			if (px[3] >= 128) {
+				counts[to5(px[0]) | (to5(px[1]) << 5) | (to5(px[2]) << 10)]++;
+			}
+		}
+	}
+	std::vector<HistEntry> hist;
+	for (uint32_t k = 0; k < 32768; k++) {
+		if (counts[k]) {
+			hist.push_back({ (uint16_t)k, counts[k] });
+		}
+	}
+	if (hist.empty() || p_colors <= 0) {
+		return false;
+	}
+	if ((int32_t)hist.size() <= p_colors) {
+		for (const HistEntry &h : hist) {
+			r_palette.push_back(h.key);
+		}
+	} else {
+		r_palette = median_cut(hist, p_colors);
+	}
+	return !r_palette.empty();
+}
+
+bool apply_palette(const uint16_t *p_palette, int32_t p_count, TextureData &r_texture) {
+	const int32_t entries = r_texture.clut_entries();
+	if (!r_texture.shared_palette || !p_palette || p_count <= 0 || p_count > entries - 1) {
+		return false;
+	}
+	r_texture.clut.assign(entries, 0);
+	r_texture.clut_semi.assign(entries, 0);
+	r_texture.clut_white.assign(entries, 0);
+	for (int32_t i = 0; i < p_count; i++) {
+		const uint16_t key = p_palette[i] & 0x7FFF;
+		const uint16_t v = key == 0 ? (uint16_t)0x8000 : key; // Opaque black
+		r_texture.clut[i + 1] = v;
+		r_texture.clut_semi[i + 1] = (uint16_t)(v | 0x8000);
+		r_texture.clut_white[i + 1] = 0xFFFF;
+	}
+	r_texture.colors = p_count + 1;
 	return true;
 }
 
@@ -415,7 +553,7 @@ void write_baked_textures(const std::vector<BakedTexture> &p_textures, std::vect
 		w.u32((uint32_t)t.width);
 		w.u32((uint32_t)t.height);
 		w.u8(t.depth);
-		w.u8((t.has_transparent ? 1 : 0) | (t.has_semi ? 2 : 0));
+		w.u8((t.has_transparent ? 1 : 0) | (t.has_semi ? 2 : 0) | (t.shared_palette ? 4 : 0));
 		w.u8(t.mean[0]);
 		w.u8(t.mean[1]);
 		w.u8(t.mean[2]);
@@ -451,6 +589,7 @@ bool read_baked_textures(const uint8_t *p_bytes, size_t p_size, std::vector<Bake
 		const uint8_t flags = r.u8();
 		t.has_transparent = (flags & 1) != 0;
 		t.has_semi = (flags & 2) != 0;
+		t.shared_palette = (flags & 4) != 0;
 		t.mean[0] = r.u8();
 		t.mean[1] = r.u8();
 		t.mean[2] = r.u8();

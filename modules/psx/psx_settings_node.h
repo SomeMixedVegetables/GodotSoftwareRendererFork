@@ -13,6 +13,7 @@
 
 #pragma once
 
+#include "psx_palette.h"
 #include "psx_settings.h"
 
 #include "scene/main/node.h"
@@ -72,7 +73,10 @@ private:
 	Dither psx_dither = DITHER_PROJECT;
 	Subdivide psx_subdivide = SUBDIVIDE_PROJECT;
 	PSXBlend psx_blend = PSX_BLEND_MATERIAL;
+	Ref<PSXPalette> psx_palette;
 	RID registered_rid;
+
+	void _palette_changed();
 
 	void _update_registration();
 
@@ -86,6 +90,8 @@ public:
 	Subdivide get_psx_subdivide() const;
 	void set_psx_blend(PSXBlend p_blend);
 	PSXBlend get_psx_blend() const;
+	void set_psx_palette(const Ref<PSXPalette> &p_palette);
+	Ref<PSXPalette> get_psx_palette() const;
 
 	~PSXMaterial3D();
 };

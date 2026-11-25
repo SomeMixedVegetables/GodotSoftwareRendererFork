@@ -1,6 +1,7 @@
 #include "psx_settings_node.h"
 
 #include "core/config/project_settings.h"
+#include "core/object/callable_mp.h"
 #include "core/object/class_db.h"
 #include "scene/main/viewport.h"
 #include "scene/resources/3d/world_3d.h"
@@ -14,6 +15,7 @@ static const char *_group_of(int p_setting) {
 		case PSX_SETTING_TEXTURE_MAX_SIZE:
 		case PSX_SETTING_TEXTURE_DEPTH:
 		case PSX_SETTING_TEXTURE_MAX_COLORS:
+		case PSX_SETTING_TEXTURE_DITHER:
 			return "Textures";
 		default:
 			return "Look";
@@ -190,6 +192,7 @@ void PSXMaterial3D::_update_registration() {
 	o.dither = psx_dither == DITHER_ON ? PSXMaterialOverrides::DITHER_ON : (psx_dither == DITHER_OFF ? PSXMaterialOverrides::DITHER_OFF : PSXMaterialOverrides::DITHER_DEFAULT);
 	o.no_subdivide = psx_subdivide == SUBDIVIDE_OFF;
 	o.blend = (uint8_t)psx_blend; // Same order as PSXMaterialOverrides::Blend
+	o.palette = psx_palette.is_valid() ? (uint64_t)psx_palette->get_instance_id() : 0;
 	if (o.is_default()) {
 		if (registered_rid.is_valid()) {
 			PSXSettingsRegistry::remove_material(registered_rid);
@@ -228,6 +231,31 @@ PSXMaterial3D::PSXBlend PSXMaterial3D::get_psx_blend() const {
 	return psx_blend;
 }
 
+void PSXMaterial3D::set_psx_palette(const Ref<PSXPalette> &p_palette) {
+	if (psx_palette == p_palette) {
+		return;
+	}
+	if (psx_palette.is_valid()) {
+		psx_palette->disconnect_changed(callable_mp(this, &PSXMaterial3D::_palette_changed));
+	}
+	psx_palette = p_palette;
+	if (psx_palette.is_valid()) {
+		psx_palette->connect_changed(callable_mp(this, &PSXMaterial3D::_palette_changed));
+	}
+	_update_registration();
+	emit_changed();
+}
+
+Ref<PSXPalette> PSXMaterial3D::get_psx_palette() const {
+	return psx_palette;
+}
+
+void PSXMaterial3D::_palette_changed() {
+	// The renderer reads the palette's colours by its ID: nothing to
+	// register again, but the editor redraws with the new colours.
+	emit_changed();
+}
+
 void PSXMaterial3D::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("set_psx_dither", "dither"), &PSXMaterial3D::set_psx_dither);
 	ClassDB::bind_method(D_METHOD("get_psx_dither"), &PSXMaterial3D::get_psx_dither);
@@ -235,11 +263,14 @@ void PSXMaterial3D::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("get_psx_subdivide"), &PSXMaterial3D::get_psx_subdivide);
 	ClassDB::bind_method(D_METHOD("set_psx_blend", "blend"), &PSXMaterial3D::set_psx_blend);
 	ClassDB::bind_method(D_METHOD("get_psx_blend"), &PSXMaterial3D::get_psx_blend);
+	ClassDB::bind_method(D_METHOD("set_psx_palette", "palette"), &PSXMaterial3D::set_psx_palette);
+	ClassDB::bind_method(D_METHOD("get_psx_palette"), &PSXMaterial3D::get_psx_palette);
 
 	ADD_GROUP("PSX", "psx_");
 	ADD_PROPERTY(PropertyInfo(Variant::INT, "psx_dither", PROPERTY_HINT_ENUM, "Project Setting,On,Off"), "set_psx_dither", "get_psx_dither");
 	ADD_PROPERTY(PropertyInfo(Variant::INT, "psx_subdivide", PROPERTY_HINT_ENUM, "Project Setting,Off"), "set_psx_subdivide", "get_psx_subdivide");
 	ADD_PROPERTY(PropertyInfo(Variant::INT, "psx_blend", PROPERTY_HINT_ENUM, "Material,Half,Add,Subtract,Add Quarter"), "set_psx_blend", "get_psx_blend");
+	ADD_PROPERTY(PropertyInfo(Variant::OBJECT, "psx_palette", PROPERTY_HINT_RESOURCE_TYPE, "PSXPalette"), "set_psx_palette", "get_psx_palette");
 
 	BIND_ENUM_CONSTANT(DITHER_PROJECT);
 	BIND_ENUM_CONSTANT(DITHER_ON);
