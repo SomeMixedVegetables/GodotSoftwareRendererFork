@@ -70,60 +70,93 @@ int channel(uint16_t p_key, int p_c) {
 
 // Median cut over the histogram, count-weighted; deterministic.
 std::vector<uint16_t> median_cut(std::vector<HistEntry> p_hist, int32_t p_colors) {
+	// A box's widest channel, its range and its pixel count are measured
+	// once, when the box is made (a box's entries only change when it splits).
 	struct Box {
 		size_t begin, end;
+		int range = -1, channel = 0;
+		uint64_t count = 0;
 	};
-	std::vector<Box> boxes = { { 0, p_hist.size() } };
-	auto box_range = [&](const Box &b, int &r_channel) {
-		int best = -1;
-		for (int c = 0; c < 3; c++) {
-			int lo = 31, hi = 0;
-			for (size_t i = b.begin; i < b.end; i++) {
-				const int v = channel(p_hist[i].key, c);
-				lo = v < lo ? v : lo;
-				hi = v > hi ? v : hi;
+	auto make_box = [&](size_t p_begin, size_t p_end) {
+		Box b;
+		b.begin = p_begin;
+		b.end = p_end;
+		int lo[3] = { 31, 31, 31 }, hi[3] = { 0, 0, 0 };
+		for (size_t i = p_begin; i < p_end; i++) {
+			const uint16_t key = p_hist[i].key;
+			for (int c = 0; c < 3; c++) {
+				const int v = channel(key, c);
+				lo[c] = v < lo[c] ? v : lo[c];
+				hi[c] = v > hi[c] ? v : hi[c];
 			}
-			if (hi - lo > best) {
-				best = hi - lo;
-				r_channel = c;
+			b.count += p_hist[i].count;
+		}
+		for (int c = 0; c < 3; c++) {
+			if (hi[c] - lo[c] > b.range) {
+				b.range = hi[c] - lo[c];
+				b.channel = c;
 			}
 		}
-		return best;
+		return b;
 	};
+	std::vector<Box> boxes = { make_box(0, p_hist.size()) };
+	std::vector<uint64_t> sorted, sorted_tmp;
 	while ((int32_t)boxes.size() < p_colors) {
 		// Split the box with the widest channel range, weighted by pixel count.
 		int64_t best_score = 0;
-		int best_box = -1, best_channel = 0;
+		int best_box = -1;
 		for (size_t i = 0; i < boxes.size(); i++) {
-			if (boxes[i].end - boxes[i].begin < 2) {
+			const Box &box = boxes[i];
+			if (box.end - box.begin < 2) {
 				continue;
 			}
-			int c = 0;
-			const int range = box_range(boxes[i], c);
-			uint64_t count = 0;
-			for (size_t k = boxes[i].begin; k < boxes[i].end; k++) {
-				count += p_hist[k].count;
-			}
-			const int64_t score = (int64_t)range * 1000000 + (int64_t)(count > 999999 ? 999999 : count);
-			if (range > 0 && score > best_score) {
+			const int64_t score = (int64_t)box.range * 1000000 + (int64_t)(box.count > 999999 ? 999999 : box.count);
+			if (box.range > 0 && score > best_score) {
 				best_score = score;
 				best_box = (int)i;
-				best_channel = c;
 			}
 		}
 		if (best_box < 0) {
 			break;
 		}
-		Box b = boxes[best_box];
-		const int c = best_channel;
-		std::sort(p_hist.begin() + b.begin, p_hist.begin() + b.end, [c](const HistEntry &x, const HistEntry &y) {
-			const int vx = channel(x.key, c), vy = channel(y.key, c);
-			return vx != vy ? vx < vy : x.key < y.key;
-		});
-		uint64_t total = 0;
-		for (size_t k = b.begin; k < b.end; k++) {
-			total += p_hist[k].count;
+		const Box b = boxes[best_box];
+		const int c = b.channel;
+		// Order the box by the channel, then by key (keys are unique, so the
+		// order is complete), packed as integers: sorted directly when the box
+		// is small, else by a radix sort (key low byte, key high byte, then the
+		// channel, each pass keeping the order of the one before).
+		const size_t n = b.end - b.begin;
+		sorted.resize(n);
+		sorted_tmp.resize(n);
+		for (size_t k = 0; k < n; k++) {
+			const HistEntry &h = p_hist[b.begin + k];
+			sorted[k] = ((uint64_t)channel(h.key, c) << 48) | ((uint64_t)h.key << 32) | h.count;
 		}
+		const bool few = n < 512;
+		if (few) {
+			std::sort(sorted.begin(), sorted.end());
+		}
+		for (int shift : { 32, 40, 48 }) {
+			if (few) {
+				break;
+			}
+			size_t start[257] = {};
+			for (size_t k = 0; k < n; k++) {
+				start[((sorted[k] >> shift) & 0xFF) + 1]++;
+			}
+			for (int d = 0; d < 256; d++) {
+				start[d + 1] += start[d];
+			}
+			for (size_t k = 0; k < n; k++) {
+				sorted_tmp[start[(sorted[k] >> shift) & 0xFF]++] = sorted[k];
+			}
+			sorted.swap(sorted_tmp);
+		}
+		for (size_t k = 0; k < n; k++) {
+			const uint64_t v = sorted[k];
+			p_hist[b.begin + k] = { (uint16_t)(v >> 32), (uint32_t)v };
+		}
+		const uint64_t total = b.count;
 		uint64_t acc = 0;
 		size_t split = b.begin + 1;
 		for (size_t k = b.begin; k < b.end - 1; k++) {
@@ -146,8 +179,8 @@ std::vector<uint16_t> median_cut(std::vector<HistEntry> p_hist, int32_t p_colors
 		if (split >= b.end) {
 			break;
 		}
-		boxes[best_box] = { b.begin, split };
-		boxes.push_back({ split, b.end });
+		boxes[best_box] = make_box(b.begin, split);
+		boxes.push_back(make_box(split, b.end));
 	}
 	std::vector<uint16_t> palette;
 	for (const Box &b : boxes) {
@@ -194,31 +227,47 @@ bool convert_texture(const uint8_t *p_rgba, int32_t p_width, int32_t p_height, c
 	// The resampled 8-bit colour (r | g << 8 | b << 16), for dithering.
 	std::vector<uint32_t> color8(p_options.dither ? tw * th : 0);
 	uint64_t mean_sum[3] = { 0, 0, 0 }, mean_count = 0;
+	// The source columns each texel column covers, worked out once.
+	std::vector<int32_t> span_x((size_t)tw + 1);
+	for (int32_t tx = 0; tx <= tw; tx++) {
+		span_x[tx] = (int32_t)((int64_t)tx * p_width / tw);
+	}
 	for (int32_t ty = 0; ty < th; ty++) {
 		const int32_t y0 = (int32_t)((int64_t)ty * p_height / th);
 		const int32_t y1 = std::max(y0 + 1, (int32_t)((int64_t)(ty + 1) * p_height / th));
 		for (int32_t tx = 0; tx < tw; tx++) {
-			const int32_t x0 = (int32_t)((int64_t)tx * p_width / tw);
-			const int32_t x1 = std::max(x0 + 1, (int32_t)((int64_t)(tx + 1) * p_width / tw));
-			uint64_t rgb[3] = { 0, 0, 0 }, plain[3] = { 0, 0, 0 }, alpha = 0, n = 0;
-			for (int32_t y = y0; y < y1; y++) {
-				const uint8_t *row = p_rgba + ((size_t)y * p_width) * 4;
-				for (int32_t x = x0; x < x1; x++) {
-					const uint8_t *px = row + x * 4;
-					const uint32_t a = use_alpha ? px[3] : 255;
-					for (int c = 0; c < 3; c++) {
-						rgb[c] += (uint64_t)px[c] * a;
-						plain[c] += px[c];
-					}
-					alpha += a;
-					n++;
-				}
-			}
+			const int32_t x0 = span_x[tx];
+			const int32_t x1 = std::max(x0 + 1, span_x[tx + 1]);
 			uint32_t c8[3];
-			for (int c = 0; c < 3; c++) {
-				c8[c] = (uint32_t)(alpha > 0 ? (rgb[c] + alpha / 2) / alpha : (plain[c] + n / 2) / n);
+			uint32_t a8;
+			if (y1 - y0 == 1 && x1 - x0 == 1) {
+				// One source texel (the image is already this size, or grows):
+				// the averages below come out as the texel itself.
+				const uint8_t *px = p_rgba + ((size_t)y0 * p_width + x0) * 4;
+				c8[0] = px[0];
+				c8[1] = px[1];
+				c8[2] = px[2];
+				a8 = use_alpha ? px[3] : 255;
+			} else {
+				uint64_t rgb[3] = { 0, 0, 0 }, plain[3] = { 0, 0, 0 }, alpha = 0, n = 0;
+				for (int32_t y = y0; y < y1; y++) {
+					const uint8_t *row = p_rgba + ((size_t)y * p_width) * 4;
+					for (int32_t x = x0; x < x1; x++) {
+						const uint8_t *px = row + x * 4;
+						const uint32_t a = use_alpha ? px[3] : 255;
+						for (int c = 0; c < 3; c++) {
+							rgb[c] += (uint64_t)px[c] * a;
+							plain[c] += px[c];
+						}
+						alpha += a;
+						n++;
+					}
+				}
+				for (int c = 0; c < 3; c++) {
+					c8[c] = (uint32_t)(alpha > 0 ? (rgb[c] + alpha / 2) / alpha : (plain[c] + n / 2) / n);
+				}
+				a8 = (uint32_t)((alpha + n / 2) / n);
 			}
-			const uint32_t a8 = (uint32_t)((alpha + n / 2) / n);
 			bool transparent = false, semi = false;
 			switch (p_options.alpha_mode) {
 				case ALPHA_CUT:
@@ -267,18 +316,23 @@ bool convert_texture(const uint8_t *p_rgba, int32_t p_width, int32_t p_height, c
 		return (uint16_t)p_key;
 	};
 
-	// Histogram of visible colours.
-	std::vector<uint32_t> counts(65536, 0);
+	// Histogram of visible colours, in key order. The table of counts for
+	// every key is kept per thread and only the keys used are cleared
+	// again, so a small texture does not pay for clearing and scanning all
+	// 65536.
+	thread_local std::vector<uint32_t> counts(65536, 0);
+	std::vector<uint16_t> keys;
 	for (uint32_t t : texel) {
-		if (t != TRANSPARENT) {
-			counts[t]++;
+		if (t != TRANSPARENT && counts[t]++ == 0) {
+			keys.push_back((uint16_t)t);
 		}
 	}
+	std::sort(keys.begin(), keys.end());
 	std::vector<HistEntry> hist;
-	for (uint32_t k = 0; k < 65536; k++) {
-		if (counts[k]) {
-			hist.push_back({ (uint16_t)k, counts[k] });
-		}
+	hist.reserve(keys.size());
+	for (uint16_t k : keys) {
+		hist.push_back({ k, counts[k] });
+		counts[k] = 0;
 	}
 	const int32_t reserved = (r_texture.has_transparent || use_palette) ? 1 : 0;
 	const int32_t unique = (int32_t)hist.size();
@@ -341,31 +395,59 @@ bool convert_texture(const uint8_t *p_rgba, int32_t p_width, int32_t p_height, c
 
 	// Nearest palette entry for a colour key (semi flag must match when the
 	// palette has an entry of that kind), found once per key.
-	std::vector<int16_t> lookup(65536, -1);
+	// Kept per thread like counts: the keys found are set back to -1 at the end.
+	thread_local std::vector<int16_t> lookup(65536, -1);
+	std::vector<uint16_t> looked_up;
+	// The result is the first palette entry (lowest index) at the smallest
+	// distance. To find it without measuring every entry, the entries are
+	// kept in order of red, and the search walks outwards from the key's red
+	// until the red difference alone is further than the best so far.
+	struct PaletteColor {
+		int r, g, b;
+		int index;
+		bool semi;
+	};
+	std::vector<PaletteColor> by_red(palette.size());
+	for (size_t p = 0; p < palette.size(); p++) {
+		by_red[p] = { channel(palette[p], 0), channel(palette[p], 1), channel(palette[p], 2), (int)p, (palette[p] & 0x8000) != 0 };
+	}
+	std::stable_sort(by_red.begin(), by_red.end(), [](const PaletteColor &x, const PaletteColor &y) { return x.r < y.r; });
 	auto nearest = [&](uint32_t p_key) -> uint32_t {
 		if (lookup[p_key] >= 0) {
 			return (uint32_t)lookup[p_key];
 		}
 		const bool semi = (p_key & 0x8000) != 0;
+		const int kr = channel((uint16_t)p_key, 0), kg = channel((uint16_t)p_key, 1), kb = channel((uint16_t)p_key, 2);
+		size_t start = 0;
+		while (start < by_red.size() && by_red[start].r < kr) {
+			start++;
+		}
 		int best = -1;
 		int best_d = 1 << 30;
+		// Pass 0 only looks at entries of the key's kind (semi or not);
+		// pass 1, needed when there are none, at all of them.
 		for (int pass = 0; pass < 2 && best < 0; pass++) {
-			for (size_t p = 0; p < palette.size(); p++) {
-				if (pass == 0 && ((palette[p] & 0x8000) != 0) != semi) {
-					continue;
+			auto consider = [&](const PaletteColor &e) {
+				if (pass == 0 && e.semi != semi) {
+					return;
 				}
-				int d = 0;
-				for (int c = 0; c < 3; c++) {
-					const int diff = channel((uint16_t)p_key, c) - channel(palette[p], c);
-					d += diff * diff;
-				}
-				if (d < best_d) {
+				const int d = (kr - e.r) * (kr - e.r) + (kg - e.g) * (kg - e.g) + (kb - e.b) * (kb - e.b);
+				if (d < best_d || (d == best_d && e.index < best)) {
 					best_d = d;
-					best = (int)p;
+					best = e.index;
 				}
+			};
+			// Entries with an equal red difference can still tie, so the walk
+			// stops only once that difference is strictly further.
+			for (size_t i = start; i < by_red.size() && (by_red[i].r - kr) * (by_red[i].r - kr) <= best_d; i++) {
+				consider(by_red[i]);
+			}
+			for (size_t i = start; i-- > 0 && (kr - by_red[i].r) * (kr - by_red[i].r) <= best_d;) {
+				consider(by_red[i]);
 			}
 		}
 		lookup[p_key] = (int16_t)(best + reserved);
+		looked_up.push_back((uint16_t)p_key);
 		return (uint32_t)lookup[p_key];
 	};
 
@@ -416,6 +498,9 @@ bool convert_texture(const uint8_t *p_rgba, int32_t p_width, int32_t p_height, c
 			const uint32_t index = t == TRANSPARENT ? 0u : nearest(amp16 > 0 ? dithered(i, amp16) : t);
 			r_texture.texels[(size_t)y * hw + x / per_hw] |= (uint16_t)(index << ((x % per_hw) * bits));
 		}
+	}
+	for (uint16_t k : looked_up) {
+		lookup[k] = -1;
 	}
 	return true;
 }

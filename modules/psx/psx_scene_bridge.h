@@ -547,6 +547,7 @@ public:
 		f.cam_basis = p_camera.main_transform.basis.orthonormalized();
 		RendererRD::MeshStorage *mesh_storage = RendererRD::MeshStorage::get_singleton();
 		_prefetch_meshes(mesh_storage, p_instances);
+		_prefetch_textures(mesh_storage, p_instances);
 
 		for (uint32_t i = 0; i < p_instances.size(); i++) {
 			const RenderGeometryInstanceBase *inst = static_cast<const RenderGeometryInstanceBase *>(p_instances[i]);
@@ -569,6 +570,7 @@ public:
 		}
 		_draw_sky(f);
 		fetched.clear(); // Fetched for a mesh not drawn after all
+		fetched_images.clear(); // Or a texture
 		_evict();
 		r_stats.textures_resident = 0;
 		r_stats.textures_baked = 0;
@@ -1460,6 +1462,128 @@ private:
 		_fetch_surfaces(p_storage, wanted);
 	}
 
+	// Images read back for textures about to be converted (_source_image
+	// takes them).
+	HashMap<RID, Ref<Image>> fetched_images;
+
+	// Reads back, in one batch, every texture the instances' materials use
+	// that has not been read yet (or changed since): like a mesh buffer,
+	// each texture read on its own waits for the GPU to finish all its
+	// work. Textures baked at import and render targets are not read here;
+	// anything this misses is read when converted.
+	void _prefetch_textures(RendererRD::MeshStorage *p_storage, const PagedArray<RenderGeometryInstance *> &p_instances) {
+		RendererRD::TextureStorage *ts = RendererRD::TextureStorage::get_singleton();
+		LocalVector<RID> wanted;
+		HashSet<RID> seen_materials, seen_textures;
+		auto want = [&](RID p_material) {
+			if (!p_material.is_valid() || seen_materials.has(p_material)) {
+				return;
+			}
+			seen_materials.insert(p_material);
+			const PSXMaterialInfo m = psx_read_material<ShaderDataT>(p_material);
+			const RID tex = m.texture;
+			if (!tex.is_valid() || seen_textures.has(tex)) {
+				return;
+			}
+			seen_textures.insert(tex);
+			if (!ts->owns_texture(tex) || ts->texture_is_render_target(tex) || PSXTexture::get_baked_version(tex, m.alpha_mode, m.alpha_cut) != 0) {
+				return;
+			}
+			const SourceImage *found = source_images.getptr(tex);
+			if (!found || found->version != ts->texture_get_content_version(tex)) {
+				wanted.push_back(tex);
+			}
+		};
+		for (uint32_t i = 0; i < p_instances.size(); i++) {
+			const RenderGeometryInstanceBase *inst = static_cast<const RenderGeometryInstanceBase *>(p_instances[i]);
+			if (!inst->data || (inst->layer_mask & USER_LAYERS) == 0) {
+				continue;
+			}
+			RID mesh;
+			if (inst->data->base_type == RSE::INSTANCE_MESH) {
+				mesh = inst->data->base;
+			} else if (inst->data->base_type == RSE::INSTANCE_MULTIMESH) {
+				mesh = p_storage->_multimesh_get_mesh(inst->data->base);
+			}
+			if (!mesh.is_valid() || !p_storage->owns_mesh(mesh)) {
+				continue;
+			}
+			// As _draw_instance picks each surface's material.
+			if (inst->data->material_override.is_valid()) {
+				want(inst->data->material_override);
+				continue;
+			}
+			const int count = p_storage->mesh_get_surface_count(mesh);
+			for (int surface = 0; surface < count; surface++) {
+				RID material;
+				if (surface < inst->data->surface_materials.size()) {
+					material = inst->data->surface_materials[surface];
+				}
+				want(material.is_valid() ? material : p_storage->mesh_surface_get_material(mesh, surface));
+			}
+		}
+		if (wanted.is_empty()) {
+			return;
+		}
+		PSXSceneStats &st = active_stats ? *active_stats : unused_stats;
+		PSXScopedTimer timer(st.texture_read_usec);
+		RD *rd = RD::get_singleton();
+		const uint64_t staging_mb = (uint64_t)MAX(1, (int)GLOBAL_GET("rendering/rendering_device/staging_buffer/max_size_mb"));
+		const uint64_t budget = staging_mb * 1024 * 1024 / 4;
+		struct Part {
+			RID texture;
+			RID source;
+			std::shared_ptr<PSXDownload> slot;
+		};
+		LocalVector<Part> parts;
+		uint64_t batch_bytes = 0;
+		auto finish = [&]() {
+			if (parts.is_empty()) {
+				return;
+			}
+			// The one wait: the last texture read again directly; the queued
+			// reads arrive in it.
+			Part &last = parts[parts.size() - 1];
+			last.slot->data = rd->texture_get_data(last.source, 0);
+			last.slot->done = true;
+			for (Part &part : parts) {
+				if (!part.slot->done) {
+					part.slot->data = rd->texture_get_data(part.source, 0); // Not delivered: read it now.
+				}
+				if (!part.slot->data.is_empty()) {
+					fetched_images[part.texture] = ts->texture_2d_get_from_data(part.texture, part.slot->data);
+				}
+			}
+			parts.clear();
+			batch_bytes = 0;
+		};
+		for (const RID &tex : wanted) {
+			const RID source = ts->texture_2d_get_read_source(tex);
+			if (!source.is_valid() || !rd->texture_is_valid(source)) {
+				continue; // Kept by the texture storage, or nothing to read
+			}
+			const RD::TextureFormat format = rd->texture_get_format(source);
+			// Generous: 16 bytes a texel, and twice that for the mipmaps.
+			const uint64_t estimate = (uint64_t)format.width * format.height * 32 + 256;
+			if (estimate > budget) {
+				continue;
+			}
+			if (batch_bytes + estimate > budget) {
+				finish();
+			}
+			Part part;
+			part.texture = tex;
+			part.source = source;
+			part.slot = std::make_shared<PSXDownload>();
+			if (rd->texture_get_data_async(source, 0, Callable(memnew(PSXDownloadCallable(part.slot)))) != OK) {
+				continue;
+			}
+			parts.push_back(part);
+			batch_bytes += estimate;
+		}
+		finish();
+	}
+
 	MeshEntry *_get_mesh(RendererRD::MeshStorage *p_storage, RID p_mesh) {
 		const AABB aabb = p_storage->mesh_get_aabb(p_mesh);
 		const int surface_count = p_storage->mesh_get_surface_count(p_mesh);
@@ -1892,7 +2016,13 @@ private:
 		entry.image = Ref<Image>();
 		entry.version = version;
 		entry.last_used = frame;
-		const Ref<Image> source = p_storage->texture_2d_get(p_texture);
+		Ref<Image> source;
+		if (const Ref<Image> *fetched_image = fetched_images.getptr(p_texture)) {
+			source = *fetched_image; // Read with the others this frame
+			fetched_images.erase(p_texture);
+		} else {
+			source = p_storage->texture_2d_get(p_texture);
+		}
 		if (source.is_null() || source->is_empty()) {
 			return Ref<Image>();
 		}

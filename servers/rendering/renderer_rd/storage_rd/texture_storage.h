@@ -657,6 +657,13 @@ public:
 	// again (PSX module).
 	uint64_t texture_get_content_version(RID p_texture) const;
 	bool texture_is_render_target(RID p_texture) const;
+	// texture_2d_get in two halves, so many textures can be read with one
+	// wait for the GPU (PSX module): the RenderingDevice texture whose layer
+	// 0 to read (with RenderingDevice::texture_get_data_async), or an invalid
+	// RID when texture_2d_get needs no read (its image is kept); then the
+	// image texture_2d_get would return, built from the data read.
+	RID texture_2d_get_read_source(RID p_texture) const;
+	Ref<Image> texture_2d_get_from_data(RID p_texture, const Vector<uint8_t> &p_data) const;
 	virtual uint64_t texture_get_native_handle(RID p_texture, bool p_srgb = false) const override;
 
 	//internal usage

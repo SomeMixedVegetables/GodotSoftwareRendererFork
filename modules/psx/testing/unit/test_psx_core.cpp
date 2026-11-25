@@ -23,6 +23,7 @@
 #include <cstring>
 #include <string>
 #include <algorithm>
+#include <chrono>
 #include <vector>
 
 using namespace psx;
@@ -2115,6 +2116,54 @@ static void dump_demo(const std::string &dir) {
 	}
 }
 
+// --bench: times texture conversion on synthetic photo-like images (smooth
+// gradients with noise, so they have many colours), the work a texture
+// costs the first time it is drawn. Prints PSX_BENCH lines; not a test.
+static void bench_textures() {
+	struct Case {
+		int32_t size;
+		bool dither;
+		int32_t max_colors;
+	};
+	const Case cases[] = { { 32, false, 0 }, { 64, false, 0 }, { 128, false, 0 }, { 256, false, 0 }, { 256, true, 0 }, { 512, false, 0 }, { 512, true, 0 }, { 1024, false, 0 }, { 256, false, 16 } };
+	for (const Case &c : cases) {
+		std::vector<uint8_t> rgba((size_t)c.size * c.size * 4);
+		uint32_t seed = 12345;
+		for (int32_t y = 0; y < c.size; y++) {
+			for (int32_t x = 0; x < c.size; x++) {
+				seed = seed * 1664525u + 1013904223u;
+				const int noise = (int)((seed >> 24) & 31) - 16;
+				uint8_t *px = &rgba[((size_t)y * c.size + x) * 4];
+				px[0] = (uint8_t)std::clamp(x * 255 / c.size + noise, 0, 255);
+				px[1] = (uint8_t)std::clamp(y * 255 / c.size - noise, 0, 255);
+				px[2] = (uint8_t)std::clamp((x + y) * 127 / c.size + noise / 2, 0, 255);
+				px[3] = 255;
+			}
+		}
+		TextureOptions opt;
+		opt.dither = c.dither;
+		opt.max_colors = c.max_colors;
+		const int runs = 5;
+		TextureData out;
+		const auto t0 = std::chrono::steady_clock::now();
+		for (int r = 0; r < runs; r++) {
+			convert_texture(rgba.data(), c.size, c.size, opt, out);
+		}
+		const auto t1 = std::chrono::steady_clock::now();
+		const long long us = (long long)std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0).count() / runs;
+		// A checksum of the result, so a faster conversion can be shown to give the same texture.
+		uint32_t sum = 2166136261u;
+		auto mix = [&](const std::vector<uint16_t> &p_v) {
+			for (uint16_t v : p_v) {
+				sum = (sum ^ v) * 16777619u;
+			}
+		};
+		mix(out.texels);
+		mix(out.clut);
+		std::printf("PSX_BENCH texture size=%d dither=%d max_colors=%d us=%lld depth=%d colors=%d sum=%08x\n", c.size, c.dither ? 1 : 0, c.max_colors, us, (int)out.depth, out.colors, sum);
+	}
+}
+
 int main(int argc, char **argv) {
 	struct Test {
 		const char *name;
@@ -2169,6 +2218,9 @@ int main(int argc, char **argv) {
 	}
 	if (argc >= 3 && std::strcmp(argv[1], "--dump") == 0) {
 		dump_demo(argv[2]);
+	}
+	if (argc >= 2 && std::strcmp(argv[argc - 1], "--bench") == 0) {
+		bench_textures();
 	}
 	const int total = (int)(sizeof(tests) / sizeof(tests[0]));
 	std::printf("PSX_UNIT tests=%d failed=%d checks=%d check_failures=%d\n", total, failed_tests, g_checks, g_failures);

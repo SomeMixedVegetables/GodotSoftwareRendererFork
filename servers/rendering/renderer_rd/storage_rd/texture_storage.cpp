@@ -1911,6 +1911,22 @@ void TextureStorage::texture_3d_placeholder_initialize(RID p_texture) {
 }
 
 Ref<Image> TextureStorage::texture_2d_get(RID p_texture) const {
+	const RID source = texture_2d_get_read_source(p_texture);
+	return texture_2d_get_from_data(p_texture, source.is_valid() ? RD::get_singleton()->texture_get_data(source, 0) : Vector<uint8_t>());
+}
+
+RID TextureStorage::texture_2d_get_read_source(RID p_texture) const {
+	Texture *tex = texture_owner.get_or_null(p_texture);
+	ERR_FAIL_NULL_V(tex, RID());
+#ifdef TOOLS_ENABLED
+	if (tex->image_cache_2d.is_valid() && !tex->is_render_target) {
+		return RID();
+	}
+#endif
+	return tex->rd_texture;
+}
+
+Ref<Image> TextureStorage::texture_2d_get_from_data(RID p_texture, const Vector<uint8_t> &p_data) const {
 	Texture *tex = texture_owner.get_or_null(p_texture);
 	ERR_FAIL_NULL_V(tex, Ref<Image>());
 
@@ -1919,7 +1935,7 @@ Ref<Image> TextureStorage::texture_2d_get(RID p_texture) const {
 		return tex->image_cache_2d;
 	}
 #endif
-	Vector<uint8_t> data = RD::get_singleton()->texture_get_data(tex->rd_texture, 0);
+	const Vector<uint8_t> &data = p_data;
 	ERR_FAIL_COND_V(data.is_empty(), Ref<Image>());
 	Ref<Image> image;
 

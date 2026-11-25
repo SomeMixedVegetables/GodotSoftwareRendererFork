@@ -107,6 +107,12 @@ lines, the ordering table, frame layout and the demo. It also saves demo
 frames as PNG to `bin\psx_test_out\unit\demo\`, rendered without Godot or a
 window.
 
+After a `unit` run, `bin\psx_test_out\unit\test_psx_core.exe --bench` times
+texture conversion on noisy synthetic images (the slowest kind: thousands of
+colours to cut to a palette), one `PSX_BENCH` line per size with the time and
+a checksum of the result. A change meant only to make conversion faster
+should leave every checksum the same.
+
 ## Output
 
 Everything goes to `bin\psx_test_out\` (git-ignored), per scene and mode:
@@ -301,9 +307,10 @@ preview)`.
   only when its surfaces change). All the meshes new in a frame are read in
   one batch, which waits for the GPU once (about 5 ms for the 22 meshes of
   `ext_models`); meshes with blend shapes are read one buffer at a time,
-  which waits for each. Textures are read back and converted the first
-  time they are used too (about 25 ms for 100 textures); `PSXTexture`
-  resources baked at import skip that.
+  which waits for each. Textures are read back (in one batch too) and
+  converted the first time they are used: about 12 ms for the 103 textures
+  of `ext_models`, and up to about 1.5 ms for one 256 x 256 photo-like
+  texture. `PSXTexture` resources baked at import skip that.
 - Textures have no mipmaps or filtering (nearest texel, affine mapping, as
   on the PS1), so fine detail shimmers at a distance.
 - Textures larger than `textures/max_size` (256 at most) are scaled down.
