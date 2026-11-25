@@ -1,0 +1,57 @@
+[gd_scene load_steps=7 format=3]
+
+; A ProceduralSkyMaterial background, drawn by the PS1 renderer as a dome of
+; Gouraud-shaded polygons: blue overhead, orange at the horizon, a dark
+; ground below. The camera looks a little up so the sky and the ground both
+; show; the ambient light comes from the sky (its mean colour).
+
+[sub_resource type="ProceduralSkyMaterial" id="sky_mat"]
+sky_top_color = Color(0.1, 0.3, 0.8, 1)
+sky_horizon_color = Color(1, 0.6, 0.3, 1)
+sky_curve = 0.12
+ground_bottom_color = Color(0.08, 0.2, 0.1, 1)
+ground_horizon_color = Color(0.55, 0.42, 0.3, 1)
+ground_curve = 0.05
+
+[sub_resource type="Sky" id="sky"]
+sky_material = SubResource("sky_mat")
+
+[sub_resource type="Environment" id="env"]
+background_mode = 2
+sky = SubResource("sky")
+ambient_light_source = 3
+ambient_light_energy = 1.0
+
+[sub_resource type="BoxMesh" id="box"]
+size = Vector3(0.8, 0.8, 0.8)
+
+[sub_resource type="SphereMesh" id="sphere"]
+radius = 0.45
+height = 0.9
+radial_segments = 16
+rings = 8
+
+[sub_resource type="StandardMaterial3D" id="white"]
+albedo_color = Color(0.9, 0.9, 0.9, 1)
+
+[node name="SkyProcedural" type="Node3D"]
+
+[node name="WorldEnvironment" type="WorldEnvironment" parent="."]
+environment = SubResource("env")
+
+[node name="Camera3D" type="Camera3D" parent="."]
+transform = Transform3D(0.966, 0, 0.259, 0, 0.985, -0.174, -0.259, 0.174, 0.951, 0.5, 1.2, 4)
+
+[node name="Sun" type="DirectionalLight3D" parent="."]
+transform = Transform3D(0.866, -0.354, 0.354, 0, 0.707, 0.707, -0.5, -0.612, 0.612, 0, 5, 0)
+light_energy = 0.6
+
+[node name="Box" type="MeshInstance3D" parent="."]
+transform = Transform3D(0.866, 0, 0.5, 0, 1, 0, -0.5, 0, 0.866, -0.8, 0.4, 0)
+mesh = SubResource("box")
+surface_material_override/0 = SubResource("white")
+
+[node name="Ball" type="MeshInstance3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.9, 0.45, 0.3)
+mesh = SubResource("sphere")
+surface_material_override/0 = SubResource("white")

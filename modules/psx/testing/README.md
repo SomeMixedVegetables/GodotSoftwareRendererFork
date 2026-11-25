@@ -45,6 +45,8 @@ window frames, `-Stats`, `-Dev`, `-ModelsDir <folder>`, `-ModelsPerCategory 2`.
 | `particles_anim` | Particle animation frames (a 4 x 2 sheet, frames picked by custom data Z, clamped and looped) and per-instance MultiMesh colours on a material that uses vertex colour |
 | `skinned` | A two-bone mesh built in code, bent every frame (CPU skinning). Also fails if the mesh is read back from Godot again after its first frame (`meshes_settled`) |
 | `blend_shapes` | Meshes with two blend shapes built in code, weights changed every frame (CPU blend shapes): normalized (left), relative (middle), and on a skinned mesh (right). Also fails if a mesh is read back again after its first frame (`meshes_settled`) |
+| `sky_panorama` | A PanoramaSkyMaterial (a GradientTexture2D, no image file) drawn as a textured dome, turned 40 degrees by the environment's sky_rotation; ambient light from the sky |
+| `sky_procedural` | A ProceduralSkyMaterial drawn as a dome of Gouraud-shaded polygons (sky, horizon and ground colours, custom curves); ambient light from the sky |
 | `spot_cones` | Three SpotLight3D nodes with the same cone and spot_attenuation 0.25, 1 and 4, each over a sphere, to compare how their edges fade |
 | `sprites` | Sprite3D, AnimatedSprite3D and Label3D, with and without billboarding, and a billboard material |
 | `shaders` | ShaderMaterial: colour and texture uniforms, unshaded, alpha, vertex displacement, computed colour |
@@ -255,9 +257,20 @@ preview)`.
   toward their edge as Godot's do (spot_attenuation), per vertex.
 - Transparency is 50%, opaque or hidden per triangle (the PS1 has one alpha).
 - Fog follows the GTE depth cue, a curve in 1/Z fitted to Godot's at two depths.
-- Of the environment, only ambient light, the background colour and depth or
-  exponential fog are read. Sky textures, glow, tonemapping, SSAO, volumetric
-  fog and global illumination (SDFGI, VoxelGI, lightmaps) are ignored.
+- Of the environment, only ambient light, the background colour or sky and
+  depth or exponential fog are read. Glow, tonemapping, SSAO, volumetric fog
+  and global illumination (SDFGI, VoxelGI, lightmaps) are ignored.
+- Skies are drawn as a low-polygon dome around the camera, behind
+  everything (the farthest ordering-table bucket), as PS1 games drew their
+  backdrops. ProceduralSkyMaterial uses Godot's colour formula at each
+  vertex and is Gouraud-shaded between them (sun disks and the cover
+  texture are not drawn); PhysicalSkyMaterial is approximated by its
+  Rayleigh, Mie and ground colours; PanoramaSkyMaterial is a textured dome
+  (at most 256 x 256, affine, so it bends a little near the screen edges).
+  Other sky shaders fall back to the clear colour, and orthographic cameras
+  see the sky's average colour. Ambient light from the sky is one colour,
+  the sky's average, where Godot lights each direction from that part of
+  the sky.
 - Decals are not drawn. CPUParticles3D draws through its MultiMesh, with
   billboard spin, animation frames and instance colours. GPUParticles3D is
   simulated by Godot on the GPU and its particles are read back every frame

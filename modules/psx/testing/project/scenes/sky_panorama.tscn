@@ -1,0 +1,48 @@
+[gd_scene load_steps=8 format=3]
+
+; A PanoramaSkyMaterial background, drawn by the PS1 renderer as a textured
+; dome. The panorama is a GradientTexture2D (no image file): hues across,
+; running diagonally so the horizon and the seam (straight ahead of a
+; camera facing -Z without sky rotation) both show. The environment turns
+; the sky 40 degrees about Y (sky_rotation), which the dome must follow.
+
+[sub_resource type="Gradient" id="hues"]
+offsets = PackedFloat32Array(0, 0.2, 0.4, 0.6, 0.8, 1)
+colors = PackedColorArray(0.9, 0.2, 0.2, 1, 0.95, 0.85, 0.2, 1, 0.2, 0.8, 0.3, 1, 0.2, 0.6, 0.95, 1, 0.6, 0.25, 0.85, 1, 0.1, 0.1, 0.15, 1)
+
+[sub_resource type="GradientTexture2D" id="panorama"]
+gradient = SubResource("hues")
+width = 256
+height = 128
+fill_to = Vector2(1, 1)
+
+[sub_resource type="PanoramaSkyMaterial" id="sky_mat"]
+panorama = SubResource("panorama")
+
+[sub_resource type="Sky" id="sky"]
+sky_material = SubResource("sky_mat")
+
+[sub_resource type="Environment" id="env"]
+background_mode = 2
+sky = SubResource("sky")
+sky_rotation = Vector3(0, 0.698, 0)
+ambient_light_source = 3
+
+[sub_resource type="BoxMesh" id="box"]
+size = Vector3(0.8, 0.8, 0.8)
+
+[sub_resource type="StandardMaterial3D" id="white"]
+albedo_color = Color(0.9, 0.9, 0.9, 1)
+
+[node name="SkyPanorama" type="Node3D"]
+
+[node name="WorldEnvironment" type="WorldEnvironment" parent="."]
+environment = SubResource("env")
+
+[node name="Camera3D" type="Camera3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 0.985, -0.174, 0, 0.174, 0.985, 0, 1, 4)
+
+[node name="Box" type="MeshInstance3D" parent="."]
+transform = Transform3D(0.866, 0, 0.5, 0, 1, 0, -0.5, 0, 0.866, 0, 0.4, 0)
+mesh = SubResource("box")
+surface_material_override/0 = SubResource("white")

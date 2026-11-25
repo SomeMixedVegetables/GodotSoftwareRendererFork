@@ -38,6 +38,7 @@
 #include "core/templates/hash_map.h"
 #include "core/templates/local_vector.h"
 #include "servers/rendering/renderer_geometry_instance.h"
+#include "servers/rendering/renderer_rd/renderer_scene_render_rd.h"
 #include "servers/rendering/renderer_rd/storage_rd/light_storage.h"
 #include "servers/rendering/renderer_rd/storage_rd/material_storage.h"
 #include "servers/rendering/renderer_rd/storage_rd/mesh_storage.h"
@@ -413,6 +414,7 @@ public:
 		}
 
 		_gather_lights(p_lights);
+		_read_sky(p_scene_render, p_environment, r_stats);
 		const Color ambient = _ambient(p_scene_render, p_environment);
 		f.gte.ambient = { _to_fixed(ambient.r), _to_fixed(ambient.g), _to_fixed(ambient.b) };
 		f.fog = _setup_fog(p_scene_render, p_environment, proj, f);
@@ -440,6 +442,7 @@ public:
 				_draw_particles(f, mesh_storage, inst);
 			}
 		}
+		_draw_sky(f);
 		_evict();
 		r_stats.textures_resident = 0;
 		r_stats.textures_baked = 0;
@@ -467,11 +470,15 @@ public:
 
 	// The clear colour for this frame: the environment's background colour,
 	// else the viewport's clear colour, then fogged as Godot fogs the sky.
+	// With a sky, its mean colour: what an orthographic camera sees (the
+	// dome is drawn over it for a perspective one).
 	Color background(RendererSceneRender *p_scene_render, RID p_environment, const Color &p_clear) const {
 		Color bg = p_clear;
 		if (p_environment.is_valid() && p_scene_render->is_environment(p_environment) &&
 				p_scene_render->environment_get_background(p_environment) == RSE::ENV_BG_COLOR) {
 			bg = p_scene_render->environment_get_bg_color(p_environment);
+		} else if (sky.kind != SKY_NONE) {
+			bg = sky.mean;
 		}
 		if (fog_sky_affect > 0.0f) {
 			bg = bg.lerp(fog_color, fog_sky_affect);
@@ -556,6 +563,33 @@ private:
 	Color fog_color;
 	float fog_sky_affect = 0.0f;
 	uint64_t frame = 0;
+
+	// The environment's sky (ENV_BG_SKY), read by _read_sky each frame and
+	// drawn by _draw_sky as a dome around the camera, the way PS1 games
+	// drew their backdrops: ProceduralSkyMaterial (and an approximation of
+	// PhysicalSkyMaterial) as Gouraud colours, PanoramaSkyMaterial as a
+	// textured dome. Other sky shaders keep the clear colour.
+	enum SkyKind : uint8_t {
+		SKY_NONE,
+		SKY_GRADIENT,
+		SKY_PANORAMA,
+	};
+	struct SkyInfo {
+		SkyKind kind = SKY_NONE;
+		// Gradient: Godot's ProceduralSkyMaterial uniforms, linear, with
+		// the material's and the environment's energy applied.
+		Color top, horizon, ground_horizon, bottom;
+		float inv_sky_curve = 4.0f;
+		float inv_ground_curve = 30.0f;
+		RID texture; // Panorama
+		float energy = 1.0f; // Panorama: exposure times the environment's energy
+		Basis orientation; // Sky space to world (Environment.sky_rotation)
+		Color mean = Color(0, 0, 0); // sRGB, over the whole sphere: ambient light, orthographic cameras
+	};
+	SkyInfo sky;
+	uint32_t sky_mesh_key = 0;
+	psx::MeshData sky_mesh;
+	SourceSurface sky_source; // UV bounds for the panorama's texture lookup
 	// Per-instance scratch for _draw_instance.
 	LocalVector<PSXMaterialInfo> surface_mats;
 	LocalVector<uint8_t> surface_groups;
@@ -1769,6 +1803,287 @@ private:
 		}
 	}
 
+	// Reads the environment's sky into `sky` (SKY_NONE without one). The
+	// panorama is looked up here, so its mean colour is known for the
+	// ambient light of this frame.
+	void _read_sky(RendererSceneRender *p_scene_render, RID p_environment, PSXSceneStats &r_stats) {
+		sky = SkyInfo();
+		if (!p_environment.is_valid() || !p_scene_render->is_environment(p_environment) || p_scene_render->environment_get_background(p_environment) != RSE::ENV_BG_SKY) {
+			return;
+		}
+		const RID sky_rid = p_scene_render->environment_get_sky(p_environment);
+		RendererSceneRenderRD *rd = RendererSceneRenderRD::get_singleton();
+		if (!sky_rid.is_valid() || !rd) {
+			return;
+		}
+		const RID material = rd->get_sky()->sky_get_material(sky_rid);
+		if (!material.is_valid()) {
+			return;
+		}
+		RendererRD::MaterialStorage *ms = RendererRD::MaterialStorage::get_singleton();
+		auto color = [&](const char *p_name, bool &r_found) -> Color {
+			const Variant v = ms->material_get_param(material, p_name);
+			r_found = v.get_type() == Variant::COLOR;
+			// source_color uniforms: authored in sRGB, used in linear.
+			return r_found ? ((Color)v).srgb_to_linear() : Color();
+		};
+		auto number = [&](const char *p_name, float p_default) -> float {
+			const Variant v = ms->material_get_param(material, p_name);
+			return (v.get_type() == Variant::FLOAT || v.get_type() == Variant::INT) ? (float)v : p_default;
+		};
+		const float bg_energy = p_scene_render->environment_get_bg_energy_multiplier(p_environment);
+		sky.orientation = p_scene_render->environment_get_sky_orientation(p_environment);
+		sky.energy = number("exposure", 1.0f) * bg_energy;
+
+		const Variant panorama = ms->material_get_param(material, "source_panorama");
+		if (panorama.get_type() == Variant::RID && ((RID)panorama).is_valid()) {
+			sky.kind = SKY_PANORAMA;
+			sky.texture = panorama;
+			PSXMaterialInfo mat;
+			TextureEntry *tex = _sky_texture(mat, r_stats);
+			if (!tex) {
+				sky.kind = SKY_NONE; // No readable image: the clear colour.
+				return;
+			}
+			const Color m = Color(tex->data.mean[0] / 255.0f, tex->data.mean[1] / 255.0f, tex->data.mean[2] / 255.0f).srgb_to_linear() * sky.energy;
+			sky.mean = Color(MIN(m.r, 1.0f), MIN(m.g, 1.0f), MIN(m.b, 1.0f)).linear_to_srgb();
+			return;
+		}
+		bool procedural = false, physical = false, found = false;
+		sky.top = color("sky_top_color", procedural);
+		if (procedural) {
+			// ProceduralSkyMaterial (sun disks and the cover texture are not drawn).
+			sky.horizon = color("sky_horizon_color", found);
+			sky.bottom = color("ground_bottom_color", found);
+			sky.ground_horizon = color("ground_horizon_color", found);
+			sky.inv_sky_curve = number("inv_sky_curve", 4.0f);
+			sky.inv_ground_curve = number("inv_ground_curve", 30.0f);
+		} else {
+			// PhysicalSkyMaterial, roughly: Rayleigh colour overhead, Mie
+			// colour at the horizon, the ground colour below.
+			sky.top = color("rayleigh_color", physical);
+			if (!physical) {
+				return; // Another sky shader: the clear colour.
+			}
+			sky.horizon = color("mie_color", found);
+			sky.bottom = color("ground_color", found);
+			sky.ground_horizon = sky.bottom;
+		}
+		sky.kind = SKY_GRADIENT;
+		const float e = sky.energy;
+		sky.top *= e;
+		sky.horizon *= e;
+		sky.bottom *= e;
+		sky.ground_horizon *= e;
+		// Mean over the sphere: uniform in Y is uniform in area.
+		Color sum(0, 0, 0);
+		const int samples = 64;
+		for (int i = 0; i < samples; i++) {
+			sum += _sky_color(-1.0f + (i + 0.5f) * 2.0f / samples);
+		}
+		const Color m = sum / (float)samples;
+		sky.mean = Color(MIN(m.r, 1.0f), MIN(m.g, 1.0f), MIN(m.b, 1.0f)).linear_to_srgb();
+		sky.mean.a = 1.0f;
+	}
+
+	// ProceduralSkyMaterial's colour at direction height p_y (-1..1), linear.
+	Color _sky_color(float p_y) const {
+		if (p_y >= 0.0f) {
+			const float t = CLAMP(std::pow(1.0f - p_y, sky.inv_sky_curve), 0.0f, 1.0f);
+			return sky.top.lerp(sky.horizon, t);
+		}
+		const float t = CLAMP(std::pow(1.0f + p_y, sky.inv_ground_curve), 0.0f, 1.0f);
+		return sky.bottom.lerp(sky.ground_horizon, t);
+	}
+
+	// The panorama, converted and placed like a material texture (repeating,
+	// so the whole image is used). r_mat gets the UV transform into it.
+	TextureEntry *_sky_texture(PSXMaterialInfo &r_mat, PSXSceneStats &r_stats) {
+		if (sky_source.uvs.is_empty()) {
+			sky_source.uvs.resize(4);
+			sky_source.uvs[0] = 0.0f;
+			sky_source.uvs[1] = 0.0f;
+			sky_source.uvs[2] = 1.0f;
+			sky_source.uvs[3] = 1.0f;
+			sky_source.uv_min = Vector2(0, 0);
+			sky_source.uv_max = Vector2(1, 1);
+		}
+		r_mat = PSXMaterialInfo();
+		r_mat.texture = sky.texture;
+		r_mat.texture_repeat = true;
+		return _get_texture(r_mat, sky_source, r_stats);
+	}
+
+	// The sky dome: rings of vertices around the camera, packed toward the
+	// horizon where the gradient changes fastest, in the farthest ordering
+	// table bucket. Drawn after every object, so it is added to that bucket
+	// last and drawn first there: objects sorted into the same bucket still
+	// cover it. Orthographic cameras see only the mean colour (background()).
+	void _draw_sky(Frame &f) {
+		if (sky.kind == SKY_NONE || f.ortho) {
+			return;
+		}
+		PSXMaterialInfo mat;
+		TextureEntry *tex = nullptr;
+		if (sky.kind == SKY_PANORAMA) {
+			tex = _sky_texture(mat, *f.stats);
+			if (tex && !tex->placed) {
+				f.stats->texture_fallbacks++;
+				tex = nullptr; // No room in VRAM: the mean colour.
+			}
+		}
+		const bool gradient = sky.kind == SKY_GRADIENT;
+		const float fog_amount = f.fog ? fog_sky_affect : 0.0f;
+
+		// The mesh changes only with the sky, the fog or the texture's place.
+		uint32_t key = hash_murmur3_one_32((uint32_t)sky.kind | (tex ? 0x100u : 0u));
+		if (gradient) {
+			const Color cs[4] = { sky.top, sky.horizon, sky.ground_horizon, sky.bottom };
+			for (const Color &c : cs) {
+				key = hash_murmur3_one_float(c.r, hash_murmur3_one_float(c.g, hash_murmur3_one_float(c.b, key)));
+			}
+			key = hash_murmur3_one_float(sky.inv_sky_curve, hash_murmur3_one_float(sky.inv_ground_curve, key));
+			key = hash_murmur3_one_float(fog_amount, key);
+			key = hash_murmur3_one_float(fog_color.r, hash_murmur3_one_float(fog_color.g, hash_murmur3_one_float(fog_color.b, key)));
+		}
+		if (tex) {
+			key = hash_murmur3_one_32((uint32_t)(tex->data.width | tex->data.height << 16), key);
+			key = hash_murmur3_one_float(mat.uv_scale.x, hash_murmur3_one_float(mat.uv_scale.y, key));
+			key = hash_murmur3_one_float(mat.uv_offset.x, hash_murmur3_one_float(mat.uv_offset.y, key));
+		}
+		key = hash_fmix32(key);
+		if (key != sky_mesh_key || sky_mesh.indices.empty()) {
+			sky_mesh_key = key;
+			_build_sky_mesh(tex, mat, gradient, fog_amount);
+		}
+		if (sky_mesh.indices.empty()) {
+			return;
+		}
+
+		// Rotation only: the dome moves with the camera.
+		const Basis view = f.cam_inv.basis * sky.orientation;
+		for (int r = 0; r < 3; r++) {
+			for (int c = 0; c < 3; c++) {
+				f.gte.rotation.m[r][c] = (int16_t)CLAMP(std::lround(f.row_scale[r] * view.rows[r][c] * 4096.0), -32768L, 32767L);
+			}
+		}
+		f.gte.translation = { 0, 0, 0 };
+		psx::DrawParams params;
+		params.cull = psx::CULL_NONE;
+		params.lit = false;
+		params.lighting = settings.lighting;
+		params.dither = settings.dither;
+		params.frame_dither = settings.dither;
+		params.ot_shift = f.ot_shift;
+		params.ot_bias = (int32_t)OT_SIZE; // Clamped to the farthest bucket.
+		params.far_z = 0xFFFF;
+		params.screen_width = f.width;
+		params.screen_height = f.height;
+		if (tex) {
+			params.texture = &tex->draw[psx::BLEND_HALF];
+			// Fog over the panorama: the texel darkened by the fog amount,
+			// then the fog colour times it added by a second, untextured pass.
+			const uint8_t keep = _to_byte(1.0f - fog_amount);
+			params.tint[0] = params.tint[1] = params.tint[2] = keep;
+		} else if (!gradient) {
+			// Panorama without room in VRAM: its mean colour.
+			params.tint[0] = _to_byte(sky.mean.r);
+			params.tint[1] = _to_byte(sky.mean.g);
+			params.tint[2] = _to_byte(sky.mean.b);
+		}
+		psx::draw_mesh(f.gte, *f.builder, *f.ot, sky_mesh, params, f.stats->draw);
+		if (tex && fog_amount > 0.0f) {
+			psx::DrawParams add = params;
+			add.texture = nullptr;
+			add.semi = true;
+			add.blend = psx::BLEND_ADD;
+			add.tint[0] = _to_byte(MIN(fog_color.r, 1.0f) * fog_amount);
+			add.tint[1] = _to_byte(MIN(fog_color.g, 1.0f) * fog_amount);
+			add.tint[2] = _to_byte(MIN(fog_color.b, 1.0f) * fog_amount);
+			psx::draw_mesh(f.gte, *f.builder, *f.ot, sky_mesh, add, f.stats->draw);
+		}
+	}
+
+	void _build_sky_mesh(const TextureEntry *p_tex, const PSXMaterialInfo &p_mat, bool p_gradient, float p_fog) {
+		// Elevations in degrees, top to bottom; the horizon twice (sky side,
+		// ground side), since the two colours meet there.
+		static const float rings[] = { 90, 65, 45, 30, 20, 12, 7, 3.5f, 1.5f, 0, 0, -1.5f, -3.5f, -7, -12, -20, -30, -45, -65, -90 };
+		const int ring_count = (int)(sizeof(rings) / sizeof(rings[0]));
+		const int horizon_split = 10; // Rings [0, 10) are sky, [10, 20) ground.
+		const int segments = 24;
+		const float radius = 16000.0f; // GTE units: well past the near plane, inside int16.
+		LocalVector<float> positions, colors, uvs;
+		LocalVector<int32_t> indices;
+		for (int i = 0; i < ring_count; i++) {
+			const float elev = Math::deg_to_rad(rings[i]);
+			const float y = Math::sin(elev), across = Math::cos(elev);
+			Color c(1, 1, 1);
+			if (p_gradient) {
+				// Ground-side horizon ring: the ground colour at the horizon.
+				const Color lin = i >= horizon_split && rings[i] == 0.0f ? _sky_color(-1e-6f) : _sky_color(y);
+				c = Color(MIN(lin.r, 1.0f), MIN(lin.g, 1.0f), MIN(lin.b, 1.0f)).linear_to_srgb();
+				if (p_fog > 0.0f) {
+					c = c.lerp(fog_color, p_fog);
+				}
+			}
+			for (int j = 0; j <= segments; j++) {
+				// Godot's panorama lookup: u = atan2(x, -z) / 2pi, v = acos(y) / pi.
+				const float u = (float)j / segments;
+				const float angle = u * (float)Math::TAU;
+				positions.push_back(Math::sin(angle) * across * radius);
+				positions.push_back(y * radius);
+				positions.push_back(-Math::cos(angle) * across * radius);
+				colors.push_back(c.r);
+				colors.push_back(c.g);
+				colors.push_back(c.b);
+				colors.push_back(1.0f);
+				uvs.push_back(u);
+				uvs.push_back(Math::acos(CLAMP(y, -1.0f, 1.0f)) / (float)Math::PI);
+			}
+		}
+		const int row = segments + 1;
+		for (int i = 0; i + 1 < ring_count; i++) {
+			if (i == horizon_split - 1) {
+				continue; // Between the two horizon rings: nothing.
+			}
+			for (int j = 0; j < segments; j++) {
+				const int a = i * row + j, b = a + 1, c = a + row, d = c + 1;
+				if (i != 0) {
+					indices.push_back(a);
+					indices.push_back(b);
+					indices.push_back(c);
+				}
+				if (i + 1 != ring_count - 1) {
+					indices.push_back(b);
+					indices.push_back(d);
+					indices.push_back(c);
+				}
+			}
+		}
+		psx::MeshInput in;
+		in.positions = positions.ptr();
+		in.colors = colors.ptr();
+		in.uvs = p_tex ? uvs.ptr() : nullptr;
+		in.vertex_count = (int32_t)(positions.size() / 3);
+		in.indices = indices.ptr();
+		in.index_count = (int32_t)indices.size();
+		psx::ConvertOptions opt;
+		opt.scale = 1.0f;
+		opt.use_vertex_colors = p_gradient;
+		opt.vertex_colors_srgb = true;
+		if (p_tex) {
+			opt.texture_width = p_tex->data.width;
+			opt.texture_height = p_tex->data.height;
+			opt.texture_repeat = true;
+			opt.uv_scale[0] = p_mat.uv_scale.x;
+			opt.uv_scale[1] = p_mat.uv_scale.y;
+			opt.uv_offset[0] = p_mat.uv_offset.x;
+			opt.uv_offset[1] = p_mat.uv_offset.y;
+		}
+		psx::convert_mesh(in, opt, sky_mesh);
+	}
+
+
 	// Ambient light level. Colours are as picked (sRGB); Godot-match mode
 	// converts them to linear before the energy is applied, as Godot does.
 	Color _ambient(RendererSceneRender *p_scene_render, RID p_environment) const {
@@ -1785,9 +2100,15 @@ private:
 				return lin(p_scene_render->environment_get_ambient_light(p_environment)) * energy;
 			default:
 				// Background or sky: approximated by the background colour
-				// when there is one, else the ambient colour.
+				// when there is one; with a sky, its mean colour mixed with the
+				// ambient colour by sky_contribution (Godot mixes the sky's
+				// radiance in that direction); else the ambient colour.
 				if (p_scene_render->environment_get_background(p_environment) == RSE::ENV_BG_COLOR) {
 					return lin(p_scene_render->environment_get_bg_color(p_environment)) * energy;
+				}
+				if (sky.kind != SKY_NONE) {
+					const float mix = CLAMP(p_scene_render->environment_get_ambient_sky_contribution(p_environment), 0.0f, 1.0f);
+					return lin(p_scene_render->environment_get_ambient_light(p_environment)).lerp(lin(sky.mean), mix) * energy;
 				}
 				return lin(p_scene_render->environment_get_ambient_light(p_environment)) * energy;
 		}
