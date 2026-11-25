@@ -26,6 +26,7 @@ window frames, `-Stats`, `-Dev`, `-ModelsDir <folder>`, `-ModelsPerCategory 2`.
 | `basic` | A box and a sun, with a 2D label over the 3D view |
 | `blend_modes` | PSXMaterial3D `psx_blend` over black, grey and white bands: Material (opaque), Half, Add, Subtract and Add Quarter, on flat and textured quads. Godot draws them opaque (the setting is PS1-only) |
 | `controls` | The controls: a PSXSettings node turns dither off; one sphere's PSXMaterial3D turns it back on; one box's turns subdivision off; the script sets `default_ambient` through `PSX.set_setting` and must print `PSX_CONTROLS result=pass` |
+| `crowd` | 192 skinned walkers (`props/walker.tscn`, from `tools/make_crowd.gd`: a figure of boxes with 7 bones and a looping walk), each with its own animation speed, on a ground plane. A scene for profiling at scale: run it with `-Stats` |
 | `controls_off` | A PSXSettings node turns the PS1 view off: Godot's renderer draws. Checks that no PSX frames were made (no goldens) and the script's `PSX_CONTROLS` line |
 | `demo` | The built-in cube (`demo.override.cfg` turns on `debug/demo_scene`) |
 | `near_plane` | A low camera over a floor and beside a wall that both pass behind it: their triangles are clipped at the near plane, so they reach the screen edges with no holes or cracks. One floor has subdivision off (one big quad) |
@@ -138,7 +139,7 @@ work in any project:
 | `rendering/psx/debug/demo_scene` | Draw the built-in test cube instead of the scene |
 | `rendering/psx/debug/dump_dir` | Folder to save raw PSX frames to |
 | `rendering/psx/debug/dump_frames` | How many frames to save, from frame 0 |
-| `rendering/psx/debug/print_stats` | One `PSX_STATS` and one `PSX_SCENE` line per frame: timings, instances, triangles in and culled by reason, lines and points drawn. `PSX_CONVERT`: time spent reading meshes and images back from Godot, converting them, and skinning, with counts |
+| `rendering/psx/debug/print_stats` | One `PSX_STATS` and one `PSX_SCENE` line per frame: timings (`raster_us`, split into `build_us` for building the ordering table from the scene, `gpu_us` for the GPU drawing it and `scanout_us` for reading the picture out of VRAM), instances, triangles in and culled by reason, lines and points drawn. `PSX_CONVERT`: time spent reading meshes and images back from Godot, converting them, and skinning, with counts |
 
 ## Texture memory
 
@@ -292,8 +293,10 @@ preview)`.
   ordering table, as on the PS1, so overlapping or crossing polygons can sort
   wrongly. This is intended.
 - Skinned meshes, and meshes with blend shape weights that are not zero, are
-  deformed and converted again every frame on the CPU, which gets slow with
-  many characters.
+  deformed on the CPU every frame (about 1.4 ms for the 192 walkers of the
+  `crowd` scene, of a 4 ms frame). Only their positions and normals are
+  converted again; colours, UVs and the triangles come from their rest pose,
+  so subdivision splits a skinned mesh's polygons by their rest-pose size.
 - Textures have no mipmaps or filtering (nearest texel, affine mapping, as
   on the PS1), so fine detail shimmers at a distance.
 - Textures larger than `textures/max_size` (256 at most) are scaled down.

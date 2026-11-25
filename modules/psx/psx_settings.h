@@ -122,6 +122,9 @@ struct PSXFrameStats {
 	uint32_t texture_banks = 1;
 	uint32_t vram_free_percent = 100;
 	uint64_t raster_usec = 0;
+	uint64_t build_usec = 0; // Parts of raster_usec
+	uint64_t gpu_usec = 0;
+	uint64_t scanout_usec = 0;
 };
 
 // Shared by the renderer (render thread) and nodes, materials and scripts

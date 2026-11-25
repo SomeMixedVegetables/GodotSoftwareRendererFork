@@ -357,6 +357,9 @@ Dictionary PSX::get_stats() const {
 	d["texture_banks"] = s.texture_banks;
 	d["vram_free_percent"] = s.vram_free_percent;
 	d["raster_usec"] = (int64_t)s.raster_usec;
+	d["build_usec"] = (int64_t)s.build_usec;
+	d["gpu_usec"] = (int64_t)s.gpu_usec;
+	d["scanout_usec"] = (int64_t)s.scanout_usec;
 	return d;
 }
 

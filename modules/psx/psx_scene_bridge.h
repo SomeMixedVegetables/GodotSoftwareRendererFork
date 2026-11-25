@@ -125,6 +125,110 @@ struct PSXMaterialInfo {
 template <class ShaderDataT>
 struct PSXMaterialDataOf;
 
+// What psx_read_material takes from a compiled shader (not its materials'
+// parameters): read once per shader and code, since finding it means
+// searching the generated code, which every surface drawn would repeat.
+struct PSXShaderFacts {
+	String code; // Holds the code's buffer, so its address names this version
+	psx::CullMode cull = psx::CULL_BACK;
+	bool lit = true;
+	bool semi = false;
+	uint8_t blend = psx::BLEND_HALF;
+	bool vertex_colors = false;
+	bool vertex_colors_srgb = false;
+	bool emissive = false;
+	bool alpha_cut = false;
+	uint8_t billboard = 0;
+	bool billboard_keep_scale = false;
+	bool anim = false;
+	bool point_size = false;
+	bool texture_repeat_known = false;
+	bool texture_repeat = false;
+	StringName color_param = "albedo";
+	StringName texture_param = "texture_albedo";
+};
+
+template <class ShaderDataT>
+const PSXShaderFacts &psx_shader_facts(const ShaderDataT *p_sd) {
+	static HashMap<const void *, PSXShaderFacts> cache; // Render thread only
+	PSXShaderFacts *found = cache.getptr(p_sd);
+	if (found && found->code.ptr() == p_sd->code.ptr()) {
+		return *found;
+	}
+	if (!found && cache.size() >= 4096) {
+		cache.clear(); // Shaders come and go in the editor; start again.
+	}
+	PSXShaderFacts facts;
+	facts.code = p_sd->code;
+	using SD = RendererRD::MaterialStorage::ShaderData;
+	const ShaderDataT *sd = p_sd;
+	const int cull = (int)sd->cull_mode;
+	facts.cull = cull == RSE::CULL_MODE_DISABLED ? psx::CULL_NONE : (cull == RSE::CULL_MODE_FRONT ? psx::CULL_FRONT : psx::CULL_BACK);
+	facts.lit = !sd->unshaded;
+	const int blend = sd->blend_mode;
+	if (blend == SD::BLEND_MODE_ADD) {
+		facts.semi = true;
+		facts.blend = psx::BLEND_ADD;
+	} else if (blend == SD::BLEND_MODE_SUB) {
+		facts.semi = true;
+		facts.blend = psx::BLEND_SUBTRACT;
+	} else if (blend == SD::BLEND_MODE_MUL || blend == SD::BLEND_MODE_PREMULTIPLIED_ALPHA || (sd->uses_alpha && !sd->uses_alpha_clip)) {
+		facts.semi = true; // The PS1 has one alpha: 50%.
+		facts.blend = psx::BLEND_HALF;
+	}
+	// StandardMaterial3D's generated code: see BaseMaterial3D::_update_shader().
+	facts.vertex_colors = sd->code.contains("albedo_tex *= COLOR");
+	facts.vertex_colors_srgb = sd->code.contains("COLOR.rgb = mix(");
+	facts.emissive = sd->code.contains("EMISSION = ");
+	facts.alpha_cut = sd->uses_alpha_clip;
+	// Billboards are done in the vertex shader; the bridge turns the
+	// instance to face the camera instead (_billboard).
+	if (sd->code.contains("// Billboard Mode: Enabled")) {
+		facts.billboard = BILLBOARD_ENABLED;
+	} else if (sd->code.contains("// Billboard Mode: Particles")) {
+		facts.billboard = BILLBOARD_PARTICLES;
+	} else if (sd->code.contains("// Billboard Mode: Y-Billboard")) {
+		facts.billboard = BILLBOARD_FIXED_Y;
+	}
+	facts.billboard_keep_scale = sd->code.contains("// Billboard Keep Scale: Enabled");
+	facts.anim = sd->code.contains("particle_total_frames");
+	facts.point_size = sd->code.contains("POINT_SIZE = point_size");
+	// StandardMaterial3D's uniform names; a custom shader's first colour and
+	// texture uniforms marked source_color stand in for them.
+	using U = ShaderLanguage::ShaderNode::Uniform;
+	if (!sd->uniforms.has(facts.color_param)) {
+		int best = INT_MAX;
+		for (const KeyValue<StringName, U> &kv : sd->uniforms) {
+			const U &u = kv.value;
+			if (u.scope == U::SCOPE_LOCAL && u.hint == U::HINT_SOURCE_COLOR && (u.type == ShaderLanguage::TYPE_VEC3 || u.type == ShaderLanguage::TYPE_VEC4) && u.prop_order < best) {
+				best = u.prop_order;
+				facts.color_param = kv.key;
+			}
+		}
+	}
+	if (!sd->uniforms.has(facts.texture_param)) {
+		int best = INT_MAX;
+		for (const KeyValue<StringName, U> &kv : sd->uniforms) {
+			const U &u = kv.value;
+			if (u.scope == U::SCOPE_LOCAL && u.use_color && u.type == ShaderLanguage::TYPE_SAMPLER2D && u.texture_order < best) { // source_color on a sampler sets use_color
+				best = u.texture_order;
+				facts.texture_param = kv.key;
+			}
+		}
+	}
+	// The albedo sampler's declaration says whether it repeats.
+	const U *tex_uniform = sd->uniforms.getptr(facts.texture_param);
+	if (tex_uniform) {
+		facts.texture_repeat_known = true;
+		facts.texture_repeat = tex_uniform->repeat != ShaderLanguage::REPEAT_DISABLE;
+	}
+	if (found) {
+		*found = facts;
+		return *found;
+	}
+	return cache.insert(p_sd, facts)->value;
+}
+
 // Reads cull mode, shading, blending and vertex-colour use from the compiled
 // scene shader (ShaderDataT is the active renderer's ShaderData), and the
 // albedo, emission and metallic uniforms of StandardMaterial3D/ORMMaterial3D.
@@ -134,12 +238,24 @@ PSXMaterialInfo psx_read_material(RID p_material) {
 	if (!p_material.is_valid()) {
 		return info;
 	}
+	// Parameter names, made once (a StringName from text is a table lookup).
+	static const struct {
+		const StringName uv1_scale = "uv1_scale";
+		const StringName uv1_offset = "uv1_offset";
+		const StringName alpha_scissor_threshold = "alpha_scissor_threshold";
+		const StringName point_size = "point_size";
+		const StringName emission = "emission";
+		const StringName emission_energy = "emission_energy";
+		const StringName particles_anim_h_frames = "particles_anim_h_frames";
+		const StringName particles_anim_v_frames = "particles_anim_v_frames";
+		const StringName particles_anim_loop = "particles_anim_loop";
+		const StringName metallic = "metallic";
+	} names;
 	RendererRD::MaterialStorage *ms = RendererRD::MaterialStorage::get_singleton();
 	if (!ms->material_get_data(p_material, RendererRD::MaterialStorage::SHADER_TYPE_3D)) {
 		return info; // No spatial shader (yet): Godot's default material.
 	}
 	info.albedo = Color(1, 1, 1, 1); // Custom shaders without an albedo uniform.
-	using SD = RendererRD::MaterialStorage::ShaderData;
 	using MD = typename PSXMaterialDataOf<ShaderDataT>::Type;
 	const MD *md = static_cast<const MD *>(ms->material_get_data(p_material, RendererRD::MaterialStorage::SHADER_TYPE_3D));
 	info.render_priority = (int32_t)md->priority + RSE::MATERIAL_RENDER_PRIORITY_MIN; // Stored as 0..255
@@ -148,69 +264,34 @@ PSXMaterialInfo psx_read_material(RID p_material) {
 	bool point_size = false; // use_point_size
 	// StandardMaterial3D's uniform names; a custom shader's first colour and
 	// texture uniforms marked source_color stand in for them.
-	StringName color_param = "albedo";
-	StringName texture_param = "texture_albedo";
+	static const StringName default_color_param = "albedo";
+	static const StringName default_texture_param = "texture_albedo";
+	StringName color_param = default_color_param;
+	StringName texture_param = default_texture_param;
 	if (sd) {
-		const int cull = (int)sd->cull_mode;
-		info.cull = cull == RSE::CULL_MODE_DISABLED ? psx::CULL_NONE : (cull == RSE::CULL_MODE_FRONT ? psx::CULL_FRONT : psx::CULL_BACK);
-		info.lit = !sd->unshaded;
-		const int blend = sd->blend_mode;
-		if (blend == SD::BLEND_MODE_ADD) {
+		const PSXShaderFacts &facts = psx_shader_facts<ShaderDataT>(sd);
+		info.cull = facts.cull;
+		info.lit = facts.lit;
+		if (facts.semi) {
 			info.semi = true;
-			info.blend = psx::BLEND_ADD;
-		} else if (blend == SD::BLEND_MODE_SUB) {
-			info.semi = true;
-			info.blend = psx::BLEND_SUBTRACT;
-		} else if (blend == SD::BLEND_MODE_MUL || blend == SD::BLEND_MODE_PREMULTIPLIED_ALPHA || (sd->uses_alpha && !sd->uses_alpha_clip)) {
-			info.semi = true; // The PS1 has one alpha: 50%.
-			info.blend = psx::BLEND_HALF;
+			info.blend = facts.blend;
 		}
-		// StandardMaterial3D's generated code: see BaseMaterial3D::_update_shader().
-		info.vertex_colors = sd->code.contains("albedo_tex *= COLOR");
-		info.vertex_colors_srgb = sd->code.contains("COLOR.rgb = mix(");
-		emissive = sd->code.contains("EMISSION = ");
-		if (sd->uses_alpha_clip) {
+		info.vertex_colors = facts.vertex_colors;
+		info.vertex_colors_srgb = facts.vertex_colors_srgb;
+		emissive = facts.emissive;
+		if (facts.alpha_cut) {
 			info.alpha_mode = psx::ALPHA_CUT;
 		} else if (info.semi && info.blend == psx::BLEND_HALF) {
 			info.alpha_mode = psx::ALPHA_BLEND;
 		}
-		// Billboards are done in the vertex shader; the bridge turns the
-		// instance to face the camera instead (_billboard).
-		if (sd->code.contains("// Billboard Mode: Enabled")) {
-			info.billboard = BILLBOARD_ENABLED;
-		} else if (sd->code.contains("// Billboard Mode: Particles")) {
-			info.billboard = BILLBOARD_PARTICLES;
-		} else if (sd->code.contains("// Billboard Mode: Y-Billboard")) {
-			info.billboard = BILLBOARD_FIXED_Y;
-		}
-		info.billboard_keep_scale = sd->code.contains("// Billboard Keep Scale: Enabled");
-		info.anim = sd->code.contains("particle_total_frames");
-		point_size = sd->code.contains("POINT_SIZE = point_size");
-		using U = ShaderLanguage::ShaderNode::Uniform;
-		if (!sd->uniforms.has(color_param)) {
-			int best = INT_MAX;
-			for (const KeyValue<StringName, U> &kv : sd->uniforms) {
-				const U &u = kv.value;
-				if (u.scope == U::SCOPE_LOCAL && u.hint == U::HINT_SOURCE_COLOR && (u.type == ShaderLanguage::TYPE_VEC3 || u.type == ShaderLanguage::TYPE_VEC4) && u.prop_order < best) {
-					best = u.prop_order;
-					color_param = kv.key;
-				}
-			}
-		}
-		if (!sd->uniforms.has(texture_param)) {
-			int best = INT_MAX;
-			for (const KeyValue<StringName, U> &kv : sd->uniforms) {
-				const U &u = kv.value;
-				if (u.scope == U::SCOPE_LOCAL && u.use_color && u.type == ShaderLanguage::TYPE_SAMPLER2D && u.texture_order < best) { // source_color on a sampler sets use_color
-					best = u.texture_order;
-					texture_param = kv.key;
-				}
-			}
-		}
-		// The albedo sampler's declaration says whether it repeats.
-		const U *tex_uniform = sd->uniforms.getptr(texture_param);
-		if (tex_uniform) {
-			info.texture_repeat = tex_uniform->repeat != ShaderLanguage::REPEAT_DISABLE;
+		info.billboard = facts.billboard;
+		info.billboard_keep_scale = facts.billboard_keep_scale;
+		info.anim = facts.anim;
+		point_size = facts.point_size;
+		color_param = facts.color_param;
+		texture_param = facts.texture_param;
+		if (facts.texture_repeat_known) {
+			info.texture_repeat = facts.texture_repeat;
 		}
 	}
 	// A parameter the material has not set takes the shader's default.
@@ -222,24 +303,24 @@ PSXMaterialInfo psx_read_material(RID p_material) {
 	if (texture.get_type() == Variant::RID) {
 		info.texture = texture;
 	}
-	const Variant uv_scale = ms->material_get_param(p_material, "uv1_scale");
+	const Variant uv_scale = ms->material_get_param(p_material, names.uv1_scale);
 	if (uv_scale.get_type() == Variant::VECTOR3) {
 		const Vector3 s = uv_scale;
 		info.uv_scale = Vector2(s.x, s.y);
 	}
-	const Variant uv_offset = ms->material_get_param(p_material, "uv1_offset");
+	const Variant uv_offset = ms->material_get_param(p_material, names.uv1_offset);
 	if (uv_offset.get_type() == Variant::VECTOR3) {
 		const Vector3 o = uv_offset;
 		info.uv_offset = Vector2(o.x, o.y);
 	}
 	if (info.alpha_mode == psx::ALPHA_CUT) {
-		const Variant cut = ms->material_get_param(p_material, "alpha_scissor_threshold");
+		const Variant cut = ms->material_get_param(p_material, names.alpha_scissor_threshold);
 		if (cut.get_type() == Variant::FLOAT) {
 			info.alpha_cut = CLAMP((float)cut, 0.0f, 1.0f);
 		}
 	}
 	if (point_size) {
-		const Variant ps = param("point_size");
+		const Variant ps = param(names.point_size);
 		if (ps.get_type() == Variant::FLOAT || ps.get_type() == Variant::INT) {
 			info.point_size = MAX((float)ps, 1.0f);
 		}
@@ -255,8 +336,8 @@ PSXMaterialInfo psx_read_material(RID p_material) {
 		info.albedo = Color(c.x, c.y, c.z, 1.0f);
 	}
 	if (emissive) {
-		const Variant emission = ms->material_get_param(p_material, "emission");
-		const Variant energy = ms->material_get_param(p_material, "emission_energy");
+		const Variant emission = ms->material_get_param(p_material, names.emission);
+		const Variant energy = ms->material_get_param(p_material, names.emission_energy);
 		if (emission.get_type() == Variant::COLOR) {
 			const float e = energy.get_type() == Variant::FLOAT ? (float)energy : 1.0f;
 			const Color c = Color(emission).srgb_to_linear() * e;
@@ -264,9 +345,9 @@ PSXMaterialInfo psx_read_material(RID p_material) {
 		}
 	}
 	if (info.anim) {
-		const Variant h = param("particles_anim_h_frames");
-		const Variant v = param("particles_anim_v_frames");
-		const Variant loop = param("particles_anim_loop");
+		const Variant h = param(names.particles_anim_h_frames);
+		const Variant v = param(names.particles_anim_v_frames);
+		const Variant loop = param(names.particles_anim_loop);
 		info.anim_h = h.get_type() == Variant::INT ? CLAMP((int32_t)h, 1, 128) : 1;
 		info.anim_v = v.get_type() == Variant::INT ? CLAMP((int32_t)v, 1, 128) : 1;
 		info.anim_loop = loop.get_type() == Variant::BOOL && (bool)loop;
@@ -274,7 +355,7 @@ PSXMaterialInfo psx_read_material(RID p_material) {
 		// an ordinary texture.
 		info.anim = info.anim_h * info.anim_v > 1;
 	}
-	const Variant metallic = ms->material_get_param(p_material, "metallic");
+	const Variant metallic = ms->material_get_param(p_material, names.metallic);
 	if (metallic.get_type() == Variant::FLOAT) {
 		info.metallic = CLAMP((float)metallic, 0.0f, 1.0f);
 	}
@@ -330,6 +411,12 @@ struct PSXSceneStats {
 	uint32_t meshes_converted = 0;
 	uint32_t textures_read = 0;
 	uint32_t textures_converted = 0;
+	// Where the frame's time went (print_stats: PSX_STATS): building the
+	// ordering table from the scene (conversion and skinning included),
+	// the GPU drawing it, and reading the picture out of VRAM.
+	uint64_t build_usec = 0;
+	uint64_t gpu_usec = 0;
+	uint64_t scanout_usec = 0;
 	psx::DrawStats draw;
 };
 
@@ -512,6 +599,9 @@ private:
 		uint32_t signature = 0; // _mesh_signature when the surfaces were read
 		LocalVector<SourceSurface> surfaces;
 		HashMap<uint64_t, psx::MeshData> converted;
+		// Skinned or blend-shaped surfaces: converted once from the rest
+		// pose, posed every frame (same keys as converted).
+		HashMap<uint64_t, psx::PoseTemplate> pose_templates;
 		uint64_t last_used = 0;
 	};
 
@@ -562,6 +652,7 @@ private:
 	};
 	LocalVector<BlendWeight> blend_cache; // This instance's blend shape weights that are not zero
 	psx::MeshData skin_mesh;
+	std::vector<float> pose_scratch;
 	Color fog_color;
 	float fog_sky_affect = 0.0f;
 	uint64_t frame = 0;
@@ -840,7 +931,7 @@ private:
 			const bool skin_surface = skinned && src.influences > 0;
 			const bool shape_surface = !blend_cache.is_empty() && src.shape_count > 0;
 			if (skin_surface || shape_surface) {
-				data = _skin(src, shape_surface, blend_normalized, skin_surface, mat, tex_data, normal_scale, sb, f);
+				data = _skin(*entry, surface, bucket, shape_surface, blend_normalized, skin_surface, mat, tex_data, normal_scale, sb, f);
 			} else {
 				data = _get_converted(*entry, surface, bucket, sb, mat, tex_data, normal_scale, *f.stats);
 			}
@@ -1024,10 +1115,25 @@ private:
 	}
 
 	// Blend shapes (blend_cache's weights, applied as Godot's skinning shader
-	// does) then linear-blend skinning on the CPU, then a fresh conversion
-	// (not cached: the pose changes every frame). Returns nullptr if nothing
-	// to draw.
-	const psx::MeshData *_skin(const SourceSurface &p_src, bool p_shapes, bool p_normalized, bool p_skin, const PSXMaterialInfo &p_mat, const psx::TextureData *p_texture, const Vector3 &p_normal_scale, double p_scale, Frame &f) {
+	// does) then linear-blend skinning on the CPU, then the surface's pose
+	// template (converted once from the rest pose) posed with the result:
+	// only positions and normals are converted every frame. Returns nullptr
+	// if nothing to draw.
+	const psx::MeshData *_skin(MeshEntry &p_entry, uint32_t p_surface, int32_t p_bucket, bool p_shapes, bool p_normalized, bool p_skin, const PSXMaterialInfo &p_mat, const psx::TextureData *p_texture, const Vector3 &p_normal_scale, double p_scale, Frame &f) {
+		const SourceSurface &p_src = p_entry.surfaces[p_surface];
+		const psx::ConvertOptions opt = _options(p_mat, p_texture, p_normal_scale, p_scale);
+		const uint64_t key = _conversion_key(p_surface, p_bucket, p_mat, p_texture, p_normal_scale);
+		psx::PoseTemplate *pose = p_entry.pose_templates.getptr(key);
+		if (!pose) {
+			pose = &p_entry.pose_templates.insert(key, psx::PoseTemplate())->value;
+			PSXScopedTimer timer(f.stats->mesh_convert_usec);
+			psx::convert_pose_template(_input(p_src), opt, *pose); // Empty on failure: remembered, not retried.
+			f.stats->conversions++;
+			f.stats->meshes_converted++;
+		}
+		if (pose->mesh.indices.empty()) {
+			return nullptr;
+		}
 		PSXScopedTimer timer(f.stats->skin_usec);
 		const uint32_t n = p_src.vertex_count;
 		const int inf = p_src.influences;
@@ -1092,11 +1198,7 @@ private:
 				skin_normals[v * 3 + 2] = (float)sn.z;
 			}
 		}
-		psx::MeshInput in = _input(p_src);
-		in.positions = skin_positions.ptr();
-		in.normals = has_normals ? skin_normals.ptr() : nullptr;
-		const psx::ConvertOptions opt = _options(p_mat, p_texture, p_normal_scale, p_scale);
-		psx::convert_mesh(in, opt, skin_mesh);
+		psx::apply_pose(*pose, skin_positions.ptr(), has_normals ? skin_normals.ptr() : nullptr, opt, skin_mesh, pose_scratch);
 		f.stats->skinned++;
 		return skin_mesh.indices.empty() ? nullptr : &skin_mesh;
 	}
@@ -1186,6 +1288,7 @@ private:
 		entry->signature = signature;
 		entry->last_used = frame;
 		entry->converted.clear();
+		entry->pose_templates.clear();
 		entry->surfaces.clear();
 		entry->surfaces.resize(surface_count);
 		for (int i = 0; i < surface_count; i++) {
@@ -1347,7 +1450,9 @@ private:
 		r_dst.shape_count = count;
 	}
 
-	const psx::MeshData *_get_converted(MeshEntry &p_entry, uint32_t p_surface, int32_t p_bucket, double p_scale, const PSXMaterialInfo &p_mat, const psx::TextureData *p_texture, const Vector3 &p_normal_scale, PSXSceneStats &r_stats) {
+	// What a converted surface is cached by: the material, the settings and
+	// scale baked into it, the texture size, the scale bucket and surface.
+	uint64_t _conversion_key(uint32_t p_surface, int32_t p_bucket, const PSXMaterialInfo &p_mat, const psx::TextureData *p_texture, const Vector3 &p_normal_scale) const {
 		uint32_t h = p_mat.hash();
 		// Settings that change while running (PSXLiveSettings) re-convert.
 		h = hash_murmur3_one_float(settings.world_scale, h);
@@ -1358,7 +1463,11 @@ private:
 		if (p_texture) {
 			h = hash_murmur3_one_32((uint32_t)(p_texture->width | p_texture->height << 16), h);
 		}
-		const uint64_t key = ((uint64_t)hash_fmix32(h) << 32) | ((uint64_t)(uint16_t)p_bucket << 16) | (p_surface & 0xFFFF);
+		return ((uint64_t)hash_fmix32(h) << 32) | ((uint64_t)(uint16_t)p_bucket << 16) | (p_surface & 0xFFFF);
+	}
+
+	const psx::MeshData *_get_converted(MeshEntry &p_entry, uint32_t p_surface, int32_t p_bucket, double p_scale, const PSXMaterialInfo &p_mat, const psx::TextureData *p_texture, const Vector3 &p_normal_scale, PSXSceneStats &r_stats) {
+		const uint64_t key = _conversion_key(p_surface, p_bucket, p_mat, p_texture, p_normal_scale);
 		psx::MeshData *found = p_entry.converted.getptr(key);
 		if (found) {
 			return found->indices.empty() ? nullptr : found;

@@ -22,8 +22,20 @@ static uint8_t unit_to_byte(float p_value) {
 	return (uint8_t)std::lround(c * 255.0f);
 }
 
+// std::lround (half away from zero) without the library call, which skinned
+// meshes made hot: truncation, then x - trunc(x) is exact in doubles.
+static inline int64_t round_half_away(double p_value) {
+	if (!(p_value > -9.0e18 && p_value < 9.0e18)) {
+		return (int64_t)std::llround(p_value < 0.0 ? -9.0e18 : 9.0e18); // Also NaN
+	}
+	int64_t t = (int64_t)p_value;
+	const double f = p_value - (double)t;
+	t += f >= 0.5 ? 1 : (f <= -0.5 ? -1 : 0);
+	return t;
+}
+
 static int16_t to_int16(double p_value, bool &r_clamped) {
-	const long v = std::lround(p_value);
+	const int64_t v = round_half_away(p_value);
 	if (v < -32768 || v > 32767) {
 		r_clamped = true;
 		return (int16_t)(v < 0 ? -32768 : 32767);
@@ -39,6 +51,7 @@ struct Subdivided {
 	std::vector<float> positions, normals, colors, uvs;
 	std::vector<int32_t> indices;
 	MeshInput input;
+	std::vector<VertexLerp> *lerps = nullptr; // When set, each vertex added is recorded
 };
 
 static bool subdivide(const MeshInput &p_input, const ConvertOptions &p_options, Subdivided &r_out) {
@@ -103,6 +116,9 @@ static bool subdivide(const MeshInput &p_input, const ConvertOptions &p_options,
 				return it->second;
 			}
 			const int32_t m = (int32_t)(r_out.positions.size() / 3);
+			if (r_out.lerps) {
+				r_out.lerps->push_back(VertexLerp{ a, b, -1.0f });
+			}
 			lerp_attr(r_out.positions, 3, a, b);
 			lerp_attr(r_out.normals, 3, a, b);
 			lerp_attr(r_out.colors, 4, a, b);
@@ -291,6 +307,9 @@ static void prepare_uvs(const MeshInput &p_input, const ConvertOptions &p_option
 		const double cb = (double)r_geo.uvs[b * 2 + p_axis] * sizes[p_axis];
 		const float t = (float)((p_line - ca) / (cb - ca));
 		const int32_t m = (int32_t)(r_geo.positions.size() / 3);
+		if (r_geo.lerps) {
+			r_geo.lerps->push_back(VertexLerp{ a, b, t });
+		}
 		lerp_into(r_geo.positions, 3, a, b, t);
 		lerp_into(r_geo.normals, 3, a, b, t);
 		lerp_into(r_geo.colors, 4, a, b, t);
@@ -369,9 +388,59 @@ static void prepare_uvs(const MeshInput &p_input, const ConvertOptions &p_option
 	finish_geometry(r_geo);
 }
 
+// Positions: the smallest shift that fits int16, and the bounding sphere.
+static void quantize_positions(const float *p_positions, int32_t n, const ConvertOptions &p_options, MeshData &r_mesh) {
+	double extent = 0.0;
+	for (int32_t i = 0; i < n * 3; i++) {
+		extent = std::fmax(extent, std::fabs((double)p_positions[i] * p_options.scale));
+	}
+	int32_t shift = 0;
+	while (shift < CONVERT_MAX_SHIFT && std::lround(extent / (double)(1 << shift)) > 32767) {
+		shift++;
+	}
+	r_mesh.shift = shift;
+	const double k = (double)p_options.scale / (double)(1 << shift);
+	r_mesh.positions.resize(n);
+	int32_t lo[3] = { 32767, 32767, 32767 }, hi[3] = { -32768, -32768, -32768 };
+	for (int32_t i = 0; i < n; i++) {
+		SVector &v = r_mesh.positions[i];
+		v.x = to_int16(p_positions[i * 3 + 0] * k, r_mesh.clamped);
+		v.y = to_int16(p_positions[i * 3 + 1] * k, r_mesh.clamped);
+		v.z = to_int16(p_positions[i * 3 + 2] * k, r_mesh.clamped);
+		const int32_t c[3] = { v.x, v.y, v.z };
+		for (int a = 0; a < 3; a++) {
+			lo[a] = c[a] < lo[a] ? c[a] : lo[a];
+			hi[a] = c[a] > hi[a] ? c[a] : hi[a];
+		}
+	}
+	r_mesh.center.x = (int16_t)((lo[0] + hi[0]) / 2);
+	r_mesh.center.y = (int16_t)((lo[1] + hi[1]) / 2);
+	r_mesh.center.z = (int16_t)((lo[2] + hi[2]) / 2);
+	double r2 = 0.0;
+	for (const SVector &v : r_mesh.positions) {
+		const double dx = v.x - r_mesh.center.x, dy = v.y - r_mesh.center.y, dz = v.z - r_mesh.center.z;
+		r2 = std::fmax(r2, dx * dx + dy * dy + dz * dz);
+	}
+	r_mesh.radius = (int32_t)std::ceil(std::sqrt(r2));
+}
+
+// Normals: unit length as 1.3.12.
+static void quantize_normals(const float *p_normals, int32_t n, const ConvertOptions &p_options, MeshData &r_mesh) {
+	r_mesh.normals.resize(n);
+	for (int32_t i = 0; i < n; i++) {
+		const double x = p_normals[i * 3] * (double)p_options.normal_scale[0];
+		const double y = p_normals[i * 3 + 1] * (double)p_options.normal_scale[1];
+		const double z = p_normals[i * 3 + 2] * (double)p_options.normal_scale[2];
+		const double len = std::sqrt(x * x + y * y + z * z);
+		const double s = len > 1e-12 ? 4096.0 / len : 0.0;
+		bool unused = false;
+		r_mesh.normals[i] = { to_int16(x * s, unused), to_int16(y * s, unused), to_int16(z * s, unused) };
+	}
+}
+
 static bool convert_direct(const MeshInput &p_input, const ConvertOptions &p_options, MeshData &r_mesh);
 
-bool convert_mesh(const MeshInput &p_input, const ConvertOptions &p_options, MeshData &r_mesh) {
+static bool convert_recording(const MeshInput &p_input, const ConvertOptions &p_options, MeshData &r_mesh, std::vector<VertexLerp> *r_lerps) {
 	if (!p_input.positions || p_input.vertex_count <= 0) {
 		r_mesh = MeshData();
 		return false;
@@ -381,6 +450,7 @@ bool convert_mesh(const MeshInput &p_input, const ConvertOptions &p_options, Mes
 	}
 	const bool textured = p_options.texture_width > 0 && p_options.texture_height > 0 && p_input.uvs;
 	Subdivided prepared;
+	prepared.lerps = r_lerps;
 	const MeshInput *src = &p_input;
 	if (textured) {
 		prepare_uvs(p_input, p_options, prepared);
@@ -388,11 +458,26 @@ bool convert_mesh(const MeshInput &p_input, const ConvertOptions &p_options, Mes
 	}
 	if (p_options.max_edge > 0.0f && p_options.scale > 0.0f) {
 		Subdivided sub;
+		sub.lerps = r_lerps;
 		if (subdivide(*src, p_options, sub)) {
 			return convert_direct(sub.input, p_options, r_mesh);
 		}
 	}
 	return convert_direct(*src, p_options, r_mesh);
+}
+
+bool convert_mesh(const MeshInput &p_input, const ConvertOptions &p_options, MeshData &r_mesh) {
+	return convert_recording(p_input, p_options, r_mesh, nullptr);
+}
+
+bool convert_pose_template(const MeshInput &p_input, const ConvertOptions &p_options, PoseTemplate &r_template) {
+	r_template = PoseTemplate();
+	r_template.source_vertices = p_input.vertex_count;
+	if (!convert_recording(p_input, p_options, r_template.mesh, &r_template.lerps)) {
+		r_template = PoseTemplate();
+		return false;
+	}
+	return true;
 }
 
 static bool convert_direct(const MeshInput &p_input, const ConvertOptions &p_options, MeshData &r_mesh) {
@@ -432,52 +517,9 @@ static bool convert_direct(const MeshInput &p_input, const ConvertOptions &p_opt
 		return false;
 	}
 
-	// Positions: the smallest shift that fits int16.
-	double extent = 0.0;
-	for (int32_t i = 0; i < n * 3; i++) {
-		extent = std::fmax(extent, std::fabs((double)p_input.positions[i] * p_options.scale));
-	}
-	int32_t shift = 0;
-	while (shift < CONVERT_MAX_SHIFT && std::lround(extent / (double)(1 << shift)) > 32767) {
-		shift++;
-	}
-	r_mesh.shift = shift;
-	const double k = (double)p_options.scale / (double)(1 << shift);
-	r_mesh.positions.resize(n);
-	int32_t lo[3] = { 32767, 32767, 32767 }, hi[3] = { -32768, -32768, -32768 };
-	for (int32_t i = 0; i < n; i++) {
-		SVector &v = r_mesh.positions[i];
-		v.x = to_int16(p_input.positions[i * 3 + 0] * k, r_mesh.clamped);
-		v.y = to_int16(p_input.positions[i * 3 + 1] * k, r_mesh.clamped);
-		v.z = to_int16(p_input.positions[i * 3 + 2] * k, r_mesh.clamped);
-		const int32_t c[3] = { v.x, v.y, v.z };
-		for (int a = 0; a < 3; a++) {
-			lo[a] = c[a] < lo[a] ? c[a] : lo[a];
-			hi[a] = c[a] > hi[a] ? c[a] : hi[a];
-		}
-	}
-	r_mesh.center.x = (int16_t)((lo[0] + hi[0]) / 2);
-	r_mesh.center.y = (int16_t)((lo[1] + hi[1]) / 2);
-	r_mesh.center.z = (int16_t)((lo[2] + hi[2]) / 2);
-	double r2 = 0.0;
-	for (const SVector &v : r_mesh.positions) {
-		const double dx = v.x - r_mesh.center.x, dy = v.y - r_mesh.center.y, dz = v.z - r_mesh.center.z;
-		r2 = std::fmax(r2, dx * dx + dy * dy + dz * dz);
-	}
-	r_mesh.radius = (int32_t)std::ceil(std::sqrt(r2));
-
-	// Normals: unit length as 1.3.12.
+	quantize_positions(p_input.positions, n, p_options, r_mesh);
 	if (p_input.normals) {
-		r_mesh.normals.resize(n);
-		for (int32_t i = 0; i < n; i++) {
-			const double x = p_input.normals[i * 3] * (double)p_options.normal_scale[0];
-			const double y = p_input.normals[i * 3 + 1] * (double)p_options.normal_scale[1];
-			const double z = p_input.normals[i * 3 + 2] * (double)p_options.normal_scale[2];
-			const double len = std::sqrt(x * x + y * y + z * z);
-			const double s = len > 1e-12 ? 4096.0 / len : 0.0;
-			bool unused = false;
-			r_mesh.normals[i] = { to_int16(x * s, unused), to_int16(y * s, unused), to_int16(z * s, unused) };
-		}
+		quantize_normals(p_input.normals, n, p_options, r_mesh);
 	}
 
 	// Colours: what Godot's StandardMaterial3D would output for an unlit
@@ -582,6 +624,42 @@ static bool convert_direct(const MeshInput &p_input, const ConvertOptions &p_opt
 		}
 	}
 	return true;
+}
+
+void apply_pose(const PoseTemplate &p_template, const float *p_positions, const float *p_normals, const ConvertOptions &p_options, MeshData &r_mesh, std::vector<float> &r_scratch) {
+	r_mesh = p_template.mesh; // Copy-assignment keeps r_mesh's storage
+	const int32_t n = p_template.source_vertices;
+	const int32_t total = (int32_t)p_template.mesh.positions.size();
+	if (total == 0 || n <= 0 || n + (int32_t)p_template.lerps.size() != total) {
+		return;
+	}
+	const bool normals = p_normals && !p_template.mesh.normals.empty();
+	r_scratch.resize((size_t)total * (normals ? 6 : 3));
+	float *pos = r_scratch.data();
+	float *nrm = normals ? pos + (size_t)total * 3 : nullptr;
+	std::copy(p_positions, p_positions + (size_t)n * 3, pos);
+	if (normals) {
+		std::copy(p_normals, p_normals + (size_t)n * 3, nrm);
+	}
+	// Added vertices as conversion made them (subdivision: the midpoint; UV
+	// cuts: a + (b - a) * t), in order, so each mixes vertices already posed.
+	auto mix = [](float *p_v, int32_t p_dst, const VertexLerp &p_l) {
+		for (int k = 0; k < 3; k++) {
+			const float va = p_v[p_l.a * 3 + k], vb = p_v[p_l.b * 3 + k];
+			p_v[p_dst * 3 + k] = p_l.t < 0.0f ? 0.5f * (va + vb) : va + (vb - va) * p_l.t;
+		}
+	};
+	for (size_t i = 0; i < p_template.lerps.size(); i++) {
+		mix(pos, n + (int32_t)i, p_template.lerps[i]);
+		if (normals) {
+			mix(nrm, n + (int32_t)i, p_template.lerps[i]);
+		}
+	}
+	r_mesh.clamped = false;
+	quantize_positions(pos, total, p_options, r_mesh);
+	if (normals) {
+		quantize_normals(nrm, total, p_options, r_mesh);
+	}
 }
 
 } // namespace psx

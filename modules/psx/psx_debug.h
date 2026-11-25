@@ -119,10 +119,11 @@ struct PSXDebug {
 		}
 	}
 
-	void report(uint64_t p_frame, uint64_t p_raster_usec, uint64_t p_upload_usec, int p_instances, int p_triangles) const {
+	// raster = build + gpu + scanout (and a little bookkeeping).
+	void report(uint64_t p_frame, uint64_t p_raster_usec, uint64_t p_build_usec, uint64_t p_gpu_usec, uint64_t p_scanout_usec, uint64_t p_upload_usec, int p_instances, int p_triangles) const {
 		if (print_stats) {
-			print_line(vformat("PSX_STATS frame=%d raster_us=%d upload_us=%d instances=%d triangles=%d",
-					(int64_t)p_frame, (int64_t)p_raster_usec, (int64_t)p_upload_usec, p_instances, p_triangles));
+			print_line(vformat("PSX_STATS frame=%d raster_us=%d build_us=%d gpu_us=%d scanout_us=%d upload_us=%d instances=%d triangles=%d",
+					(int64_t)p_frame, (int64_t)p_raster_usec, (int64_t)p_build_usec, (int64_t)p_gpu_usec, (int64_t)p_scanout_usec, (int64_t)p_upload_usec, p_instances, p_triangles));
 		}
 	}
 };

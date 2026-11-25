@@ -585,6 +585,78 @@ static void test_draw_mesh_features() {
 	CHECK_EQ(draw(opaque, fp, gte, s4), rgb15(25, 0, 0));
 }
 
+static void test_pose_template() {
+	// A 3 x 2 quad with a repeating texture (UVs over 3 x 2 tiles: cut at
+	// the tile edges) and subdivision on: the template posed with moved,
+	// turned vertices must match converting the posed mesh outright.
+	const float rest[] = { -1.5f, -1, 0, 1.5f, -1, 0, -1.5f, 1, 0, 1.5f, 1, 0 };
+	const float nrm[] = { 0, 0, 1, 0, 0, 1, 0, 0.6f, 0.8f, 0, 0, 1 };
+	const float cols[] = { 1, 0, 0, 1, 0, 1, 0, 1, 0, 0, 1, 1, 1, 1, 1, 1 };
+	const float uvs[] = { 0, 0, 3, 0, 0, 2, 3, 2 };
+	const int32_t idx[] = { 0, 1, 2, 2, 1, 3 };
+	MeshInput in;
+	in.positions = rest;
+	in.normals = nrm;
+	in.colors = cols;
+	in.uvs = uvs;
+	in.vertex_count = 4;
+	in.indices = idx;
+	in.index_count = 6;
+	ConvertOptions opt;
+	opt.scale = 100.0f;
+	opt.max_edge = 120.0f; // 1.2 units: every edge splits
+	opt.use_vertex_colors = true;
+	opt.texture_width = 16;
+	opt.texture_height = 16;
+	opt.texture_repeat = true;
+	PoseTemplate tmpl;
+	CHECK(convert_pose_template(in, opt, tmpl));
+	CHECK(!tmpl.lerps.empty());
+	CHECK_EQ((int)(tmpl.source_vertices + tmpl.lerps.size()), (int)tmpl.mesh.positions.size());
+
+	// Posed: turned 30 degrees about Y and moved (edge lengths kept, so
+	// subdivision picks the same triangles).
+	const float c = std::cos(0.5236f), sn = std::sin(0.5236f);
+	float posed[12], posed_n[12];
+	for (int v = 0; v < 4; v++) {
+		posed[v * 3] = rest[v * 3] * c + rest[v * 3 + 2] * sn + 0.25f;
+		posed[v * 3 + 1] = rest[v * 3 + 1] + 0.5f;
+		posed[v * 3 + 2] = -rest[v * 3] * sn + rest[v * 3 + 2] * c;
+		posed_n[v * 3] = nrm[v * 3] * c + nrm[v * 3 + 2] * sn;
+		posed_n[v * 3 + 1] = nrm[v * 3 + 1];
+		posed_n[v * 3 + 2] = -nrm[v * 3] * sn + nrm[v * 3 + 2] * c;
+	}
+	MeshInput moved = in;
+	moved.positions = posed;
+	moved.normals = posed_n;
+	MeshData direct, from_pose;
+	CHECK(convert_mesh(moved, opt, direct));
+	std::vector<float> scratch;
+	apply_pose(tmpl, posed, posed_n, opt, from_pose, scratch);
+	CHECK_EQ((int)from_pose.positions.size(), (int)direct.positions.size());
+	CHECK_EQ((int)from_pose.indices.size(), (int)direct.indices.size());
+	CHECK(from_pose.indices == direct.indices);
+	CHECK(from_pose.colors == direct.colors);
+	CHECK(from_pose.tri_uvs == direct.tri_uvs);
+	CHECK(from_pose.tri_window == direct.tri_window);
+	CHECK_EQ(from_pose.shift, direct.shift);
+	CHECK_EQ(from_pose.radius, direct.radius);
+	bool same_positions = from_pose.positions.size() == direct.positions.size();
+	bool same_normals = from_pose.normals.size() == direct.normals.size();
+	for (size_t i = 0; same_positions && i < direct.positions.size(); i++) {
+		same_positions = from_pose.positions[i].x == direct.positions[i].x && from_pose.positions[i].y == direct.positions[i].y && from_pose.positions[i].z == direct.positions[i].z;
+	}
+	for (size_t i = 0; same_normals && i < direct.normals.size(); i++) {
+		same_normals = from_pose.normals[i].x == direct.normals[i].x && from_pose.normals[i].y == direct.normals[i].y && from_pose.normals[i].z == direct.normals[i].z;
+	}
+	CHECK(same_positions);
+	CHECK(same_normals);
+
+	// Posing again into the same mesh reuses it and gives the same result.
+	apply_pose(tmpl, posed, posed_n, opt, from_pose, scratch);
+	CHECK(from_pose.indices == direct.indices);
+}
+
 static void test_paint_depth() {
 	// A big far triangle, a small near one over its corner, and two in one
 	// bucket: painted far buckets first, and within a bucket the first added
@@ -2060,6 +2132,7 @@ int main(int argc, char **argv) {
 		{ "subdivide_and_point_lights", test_subdivide_and_point_lights },
 		{ "lines_and_points", test_lines_and_points },
 		{ "paint_depth", test_paint_depth },
+		{ "pose_template", test_pose_template },
 		{ "convert_texture", test_convert_texture },
 		{ "baked_textures", test_baked_textures },
 		{ "palettes", test_palettes },

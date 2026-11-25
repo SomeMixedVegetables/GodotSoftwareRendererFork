@@ -159,7 +159,9 @@ class PSXSceneRenderRD : public Base {
 		// The bridge counts engine frames, not render_scene() calls: with several
 		// viewports, a texture one of them drew this frame must not be evicted
 		// for another.
+		const uint64_t build_begin = OS::get_singleton()->get_ticks_usec();
 		bridge.build(this, p_camera, p_instances, p_lights, p_environment, w, h, *gpu, pb, ot, RSG::rasterizer->get_frame_number(), scene_stats);
+		scene_stats.build_usec = OS::get_singleton()->get_ticks_usec() - build_begin;
 
 		// Far end: drawing environment, then the clear (the bucket is LIFO,
 		// so the environment, added last, goes first).
@@ -167,7 +169,9 @@ class PSXSceneRenderRD : public Base {
 		const uint32_t far_end = PSXSceneBridge<ShaderDataT>::OT_SIZE - 1;
 		ot.add(far_end, pb.fill(bx, by, w, h, (uint8_t)bg.get_r8(), (uint8_t)bg.get_g8(), (uint8_t)bg.get_b8()));
 		ot.add(far_end, pb.environment(bx, by, bx + w - 1, by + h - 1, bx, by, psx::GP0Encoder::texpage(0, 0, psx::TEXTURE_4BIT, psx::BLEND_HALF, bridge.settings.dither)));
+		const uint64_t gpu_begin = OS::get_singleton()->get_ticks_usec();
 		ot.draw(*gpu);
+		scene_stats.gpu_usec = OS::get_singleton()->get_ticks_usec() - gpu_begin;
 		gpu->display.x = bx;
 		gpu->display.y = by;
 		gpu->display.width = w;
@@ -185,7 +189,9 @@ class PSXSceneRenderRD : public Base {
 			_render_scene(p_camera, p_instances, p_lights, p_environment, p_clear);
 		}
 		frame_pixels.resize(layout.width * layout.height);
+		const uint64_t scanout_begin = OS::get_singleton()->get_ticks_usec();
 		gpu->scanout_rgba8(frame_pixels.ptr());
+		scene_stats.scanout_usec = OS::get_singleton()->get_ticks_usec() - scanout_begin;
 	}
 	// Draws the instances on editor-only layers over the PSX frame already in
 	// the render target, with Godot's renderer. Nothing to do in a game.
@@ -380,7 +386,7 @@ public:
 		RD::get_singleton()->texture_update(frame_texture, 0, bytes);
 		const uint64_t upload_usec = OS::get_singleton()->get_ticks_usec() - upload_begin;
 
-		debug.report(frame_count, raster_usec, upload_usec, (int)p_instances.size(), (int)gpu->stats.triangles);
+		debug.report(frame_count, raster_usec, scene_stats.build_usec, scene_stats.gpu_usec, scene_stats.scanout_usec, upload_usec, (int)p_instances.size(), (int)gpu->stats.triangles);
 		const psx::DrawStats &ds = scene_stats.draw;
 		debug.report_convert(frame_count, scene_stats.mesh_read_usec, scene_stats.meshes_read, scene_stats.mesh_convert_usec, scene_stats.meshes_converted, scene_stats.skin_usec, scene_stats.skinned,
 				scene_stats.texture_read_usec, scene_stats.textures_read, scene_stats.texture_convert_usec, scene_stats.textures_converted, scene_stats.particles_read_usec, scene_stats.particles);
@@ -399,6 +405,9 @@ public:
 			st.texture_banks = scene_stats.texture_banks;
 			st.vram_free_percent = scene_stats.vram_free_percent;
 			st.raster_usec = raster_usec;
+			st.build_usec = scene_stats.build_usec;
+			st.gpu_usec = scene_stats.gpu_usec;
+			st.scanout_usec = scene_stats.scanout_usec;
 			PSXSettingsRegistry::publish_stats(st);
 		}
 		frame_count++;

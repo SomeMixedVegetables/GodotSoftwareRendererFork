@@ -62,6 +62,7 @@
 				- [code]texture_fallbacks[/code]: surfaces drawn untextured because texture memory was full.
 				- [code]texture_banks[/code], [code]vram_free_percent[/code]: texture memory in use.
 				- [code]raster_usec[/code]: time spent drawing the frame, in microseconds.
+				- [code]build_usec[/code], [code]gpu_usec[/code], [code]scanout_usec[/code]: the parts of [code]raster_usec[/code]: building the frame's ordering table from the scene (mesh conversion and skinning included), the GPU drawing it, and reading the picture out of VRAM.
 			</description>
 		</method>
 		<method name="is_active" qualifiers="const">

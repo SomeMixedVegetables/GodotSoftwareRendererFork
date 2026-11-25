@@ -121,6 +121,34 @@ static constexpr int32_t CONVERT_MAX_SHIFT = 2;
 // Fills r_mesh. Returns false (and leaves r_mesh empty) for empty or invalid input.
 bool convert_mesh(const MeshInput &p_input, const ConvertOptions &p_options, MeshData &r_mesh);
 
+// A vertex conversion added (UV tile cuts, subdivision): a mix of two
+// earlier vertices, a + (b - a) * t, or their midpoint when t < 0.
+struct VertexLerp {
+	int32_t a = 0, b = 0;
+	float t = -1.0f;
+};
+
+// A mesh whose positions and normals change every frame (skinning, blend
+// shapes) but nothing else: converted once from its rest pose, then posed
+// with apply_pose, which only re-quantizes positions and normals. Colours,
+// UVs, alpha classes and the triangles (subdivision included, decided by the
+// rest pose) are kept.
+struct PoseTemplate {
+	MeshData mesh;
+	int32_t source_vertices = 0;
+	std::vector<VertexLerp> lerps; // Vertex source_vertices + i of mesh
+};
+
+// Fills r_template from the rest pose. Returns false (template empty) as
+// convert_mesh does.
+bool convert_pose_template(const MeshInput &p_input, const ConvertOptions &p_options, PoseTemplate &r_template);
+
+// r_mesh = the template with positions and normals from p_positions and
+// p_normals (source_vertices each, posed; p_normals may be null when the
+// template has none). The same result as convert_mesh on the posed input
+// when subdivision would pick the same triangles. r_scratch is reused.
+void apply_pose(const PoseTemplate &p_template, const float *p_positions, const float *p_normals, const ConvertOptions &p_options, MeshData &r_mesh, std::vector<float> &r_scratch);
+
 // sRGB <-> linear, 0..1.
 float srgb_to_linear(float p_value);
 float linear_to_srgb(float p_value);

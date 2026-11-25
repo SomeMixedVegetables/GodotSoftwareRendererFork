@@ -551,7 +551,30 @@ void draw_mesh(GTE &p_gte, PacketBuilder &p_builder, OrderingTable &p_ot, const 
 		Corner c[3];
 		int depth;
 		bool clipped; // Already cut at the near plane
+		bool original; // The mesh's own triangle (not cut or split): its vertices are cached
 	};
+	// Each vertex is transformed (RTPS gives each vertex what RTPT would)
+	// and shaded once, the first time a triangle needs it, and reused by
+	// the triangles that share it. Stamps mark this call's entries.
+	struct CachedVertex {
+		uint32_t stamp = 0;
+		uint32_t flag = 0; // The GTE flags its transform raised
+		int16_t sx = 0, sy = 0;
+		uint16_t sz = 0;
+		bool shaded = false;
+		uint8_t out[3] = { 0, 0, 0 };
+		int16_t fog = 0;
+	};
+	static thread_local std::vector<CachedVertex> vertex_cache;
+	static thread_local uint32_t vertex_stamp = 0;
+	if (++vertex_stamp == 0) { // Wrapped: forget every entry.
+		vertex_cache.assign(vertex_cache.size(), CachedVertex());
+		vertex_stamp = 1;
+	}
+	if (vertex_cache.size() < p_mesh.positions.size()) {
+		vertex_cache.resize(p_mesh.positions.size());
+	}
+	const uint32_t stamp = vertex_stamp;
 	// View Z of an object-space position, as RTPS/MVMVA compute MAC3.
 	auto view_z = [&](const SVector &p_pos) -> int64_t {
 		const Matrix &r = p_gte.rotation;
@@ -617,6 +640,7 @@ void draw_mesh(GTE &p_gte, PacketBuilder &p_builder, OrderingTable &p_ot, const 
 			dst.c[2] = pieces[k][2];
 			dst.depth = p_piece.depth + 1;
 			dst.clipped = p_piece.clipped;
+			dst.original = false;
 		}
 	};
 	bool stop = false;
@@ -646,6 +670,8 @@ void draw_mesh(GTE &p_gte, PacketBuilder &p_builder, OrderingTable &p_ot, const 
 		}
 		stack[0].depth = 0;
 		stack[0].clipped = false;
+		stack[0].original = true;
+		const uint32_t *tri_ids = idx + (size_t)t * 3;
 		int sp = 1;
 		while (sp > 0) {
 			const Piece piece = stack[--sp];
@@ -685,6 +711,7 @@ void draw_mesh(GTE &p_gte, PacketBuilder &p_builder, OrderingTable &p_ot, const 
 						dst.c[2] = poly[k];
 						dst.depth = piece.depth;
 						dst.clipped = true;
+						dst.original = false;
 					}
 					r_stats.near_clips++;
 					continue;
@@ -698,7 +725,34 @@ void draw_mesh(GTE &p_gte, PacketBuilder &p_builder, OrderingTable &p_ot, const 
 			if (p_params.ortho) {
 				near_mask = project_ortho(p_gte, p_params);
 			} else {
-				p_gte.rtpt();
+				if (piece.original) {
+					// As RTPT: the screen FIFOs hold the three vertices, the
+					// flags are all three transforms' flags together.
+					uint32_t flag = 0;
+					for (int i = 0; i < 3; i++) {
+						CachedVertex &cv = vertex_cache[tri_ids[i]];
+						if (cv.stamp != stamp) {
+							cv.stamp = stamp;
+							cv.shaded = false;
+							p_gte.v[0] = piece.c[i].pos;
+							p_gte.rtps();
+							cv.sx = p_gte.sx[2];
+							cv.sy = p_gte.sy[2];
+							cv.sz = p_gte.sz[3];
+							cv.flag = p_gte.flag;
+						}
+						flag |= cv.flag;
+					}
+					for (int i = 0; i < 3; i++) {
+						const CachedVertex &cv = vertex_cache[tri_ids[i]];
+						p_gte.sx[i] = cv.sx;
+						p_gte.sy[i] = cv.sy;
+						p_gte.sz[i + 1] = cv.sz;
+					}
+					p_gte.flag = flag;
+				} else {
+					p_gte.rtpt();
+				}
 				// A vertex nearer than H/2 overflows the divide.
 				if (p_gte.flag & FLAG_DIVIDE) {
 					for (int i = 0; i < 3; i++) {
@@ -757,7 +811,19 @@ void draw_mesh(GTE &p_gte, PacketBuilder &p_builder, OrderingTable &p_ot, const 
 				verts[i].x = xs[i];
 				verts[i].y = ys[i];
 				uint8_t out[3];
-				shade_vertex(p_gte, p_params, shade, piece.c[i].pos, piece.c[i].normal, piece.c[i].color, zs[i], out, fog_amount[i]);
+				if (piece.original && !p_params.ortho) {
+					CachedVertex &cv = vertex_cache[tri_ids[i]];
+					if (!cv.shaded) {
+						shade_vertex(p_gte, p_params, shade, piece.c[i].pos, piece.c[i].normal, piece.c[i].color, zs[i], cv.out, cv.fog);
+						cv.shaded = true;
+					}
+					out[0] = cv.out[0];
+					out[1] = cv.out[1];
+					out[2] = cv.out[2];
+					fog_amount[i] = cv.fog;
+				} else {
+					shade_vertex(p_gte, p_params, shade, piece.c[i].pos, piece.c[i].normal, piece.c[i].color, zs[i], out, fog_amount[i]);
+				}
 				verts[i].r = out[0];
 				verts[i].g = out[1];
 				verts[i].b = out[2];
