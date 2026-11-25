@@ -15,6 +15,7 @@
 #include "psx_texture.h"
 
 #include <cstdint>
+#include <vector>
 
 namespace psx {
 
@@ -80,6 +81,15 @@ struct DrawTexture {
 // with its CLUTs at p_clut_x/y, p_semi_x/y and p_white_x/y (x < 0: none).
 DrawTexture make_draw_texture(const TextureData &p_texture, int32_t p_x, int32_t p_y, int32_t p_clut_x, int32_t p_clut_y, int32_t p_semi_x, int32_t p_semi_y, int32_t p_white_x, int32_t p_white_y, uint8_t p_blend, bool p_dither, uint16_t p_bank = 0);
 
+// An opaque triangle as it was sent to the GPU, for a depth image of the
+// frame (the PS1 has no depth buffer; editor overlays need one). Screen
+// pixels relative to the drawing offset, depth as SZ.
+struct DepthTriangle {
+	int32_t x[3], y[3];
+	uint16_t z[3];
+	uint32_t otz; // Ordering table bucket
+};
+
 struct DrawParams {
 	CullMode cull = CULL_BACK;
 	bool lit = true; // Lighting on; otherwise the baked colour as-is
@@ -135,6 +145,9 @@ struct DrawParams {
 	// Point meshes (MESH_POINTS): each point is a square tile this many
 	// pixels wide. Lines are always one pixel wide, as on the GPU.
 	int32_t point_size = 1;
+	// When set, every opaque triangle drawn is also appended here (not
+	// semi-transparent ones, lines or points). See paint_depth.
+	std::vector<DepthTriangle> *depth = nullptr;
 };
 
 struct DrawStats {
@@ -159,5 +172,12 @@ struct DrawStats {
 };
 
 void draw_mesh(GTE &p_gte, PacketBuilder &p_builder, OrderingTable &p_ot, const MeshData &p_mesh, const DrawParams &p_params, DrawStats &r_stats);
+
+// Paints recorded triangles into a p_width x p_height depth image in the
+// order the ordering table draws them (far buckets first; within a bucket,
+// the last added first), each over the pixels whose centres it covers, with
+// its SZ interpolated across the screen. So each pixel ends with the depth
+// of the triangle drawn there last, as the picture shows it. 0 = none.
+void paint_depth(const std::vector<DepthTriangle> &p_triangles, int32_t p_width, int32_t p_height, std::vector<uint16_t> &r_depth);
 
 } // namespace psx

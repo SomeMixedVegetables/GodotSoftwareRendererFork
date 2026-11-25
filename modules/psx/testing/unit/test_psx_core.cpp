@@ -585,6 +585,45 @@ static void test_draw_mesh_features() {
 	CHECK_EQ(draw(opaque, fp, gte, s4), rgb15(25, 0, 0));
 }
 
+static void test_paint_depth() {
+	// A big far triangle, a small near one over its corner, and two in one
+	// bucket: painted far buckets first, and within a bucket the first added
+	// last (the ordering table draws the last added first).
+	auto tri = [](int32_t x0, int32_t y0, int32_t x1, int32_t y1, int32_t x2, int32_t y2, uint16_t z, uint32_t otz) {
+		DepthTriangle t;
+		t.x[0] = x0;
+		t.y[0] = y0;
+		t.x[1] = x1;
+		t.y[1] = y1;
+		t.x[2] = x2;
+		t.y[2] = y2;
+		t.z[0] = t.z[1] = t.z[2] = z;
+		t.otz = otz;
+		return t;
+	};
+	std::vector<DepthTriangle> tris;
+	tris.push_back(tri(0, 0, 8, 0, 0, 8, 300, 20)); // Near, added first
+	tris.push_back(tri(0, 0, 16, 0, 0, 16, 900, 90)); // Far, covers the near one
+	tris.push_back(tri(10, 10, 16, 10, 10, 16, 500, 40)); // Same bucket as the next
+	tris.push_back(tri(10, 10, 16, 10, 10, 16, 600, 40));
+	std::vector<uint16_t> depth;
+	paint_depth(tris, 16, 16, depth);
+	CHECK_EQ((int)depth.size(), 256);
+	CHECK_EQ((int)depth[1 * 16 + 1], 300); // Near drawn over far
+	CHECK_EQ((int)depth[1 * 16 + 12], 900); // Far only
+	CHECK_EQ((int)depth[11 * 16 + 11], 500); // First added drawn last
+	CHECK_EQ((int)depth[15 * 16 + 15], 0); // Nothing drawn
+
+	// Depth interpolates across the triangle (pixel centres).
+	std::vector<DepthTriangle> ramp(1, tri(0, 0, 16, 0, 0, 16, 0, 1));
+	ramp[0].z[0] = 100;
+	ramp[0].z[1] = 260;
+	ramp[0].z[2] = 100;
+	paint_depth(ramp, 16, 16, depth);
+	CHECK_EQ((int)depth[0 * 16 + 0], 105); // x = 0.5: 100 + 160 * 0.5 / 16
+	CHECK_EQ((int)depth[0 * 16 + 7], 175);
+}
+
 static void test_lines_and_points() {
 	// Two edges of a 200-unit square as lines, green and unlit (no normals).
 	const float pos[] = { -100, -100, 0, 100, -100, 0, -100, 100, 0, 100, 100, 0 };
@@ -2020,6 +2059,7 @@ int main(int argc, char **argv) {
 		{ "draw_mesh_features", test_draw_mesh_features },
 		{ "subdivide_and_point_lights", test_subdivide_and_point_lights },
 		{ "lines_and_points", test_lines_and_points },
+		{ "paint_depth", test_paint_depth },
 		{ "convert_texture", test_convert_texture },
 		{ "baked_textures", test_baked_textures },
 		{ "palettes", test_palettes },

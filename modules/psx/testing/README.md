@@ -36,7 +36,7 @@ window frames, `-Stats`, `-Dev`, `-ModelsDir <folder>`, `-ModelsPerCategory 2`.
 | `gltf_shader_runtime`, `gltf_shader_baked` | The same model imported with ShaderMaterials (a `source_color` sampler; the `psx_test_gltf_shader` editor plugin's glTF extension makes them), converted when drawn and baked on import. Both are checked against `gltf_runtime`'s goldens; the baked one must report exactly 2 baked textures |
 | `fog_multimesh` | Depth fog, sky fog, a MultiMesh grid and a large subdivided ground |
 | `ortho` | An orthographic camera |
-| `overlay` | A ring on layer 21 (where the editor puts gizmos and the grid): Godot's renderer draws it over the PS1 frame, in the composite only. Run with `-Renderer mobile` to check the overlay on Mobile |
+| `overlay` | A ring on layer 21 (where the editor puts gizmos and the grid) around a box: Godot's renderer draws it over the PS1 frame, in the composite only, with the part behind the box hidden by the frame's depth. Run with `-Renderer mobile` to check the overlay on Mobile |
 | `particles` | Particle billboards on a MultiMesh with custom data (as CPUParticles3D makes them): each arrow turned by its custom data X, as in Godot |
 | `palettes` | PSXPalette: three textures baked with one generated 16-entry palette (one with cut-out holes), the first with the palette swapped per material (same, warm, grey), and a runtime texture converted to the palette next to one with its own. The check also reads `PSX_TEXTURES`: 5 CLUTs and 5 shared slots (one CLUT for the palette, texels shared by the swaps) |
 | `texture_dither` | Ordered texture dither: a gradient with an 8-colour palette, a dark gradient at 15-bit and a gradient with a fixed 4-colour PSXPalette, baked without (top) and with (middle) dither; runtime textures dithered by `rendering/psx/textures/dither` (bottom, set in its `.override.cfg`) |
@@ -303,8 +303,12 @@ preview)`.
 - Point lights on non-uniformly scaled meshes are approximate.
 - Only VisualInstance3D layers 1-20 go through the PSX core. In the editor,
   the helpers on layers 21-32 (grid, origin axes, gizmos, selection boxes)
-  are drawn by Godot's renderer over the PSX frame. There is no depth buffer
-  under them, so they show through models, as if every gizmo were "on top".
+  are drawn by Godot's renderer over the PSX frame. The PS1 has no depth
+  buffer, so one is made for them from the opaque triangles the frame drew
+  (painted in drawing order, depth interpolated across each). Helpers are
+  hidden behind models as the picture shows them, but semi-transparent
+  surfaces, lines and points do not hide them, and where a triangle's
+  sorted order puts it in front of a nearer one, the helper sorts with it.
 - Subdivision stops once a surface reaches about 16,000 triangles, so a very
   large polygon keeps long edges.
 - Billboards (BaseMaterial3D billboard modes, Sprite3D, AnimatedSprite3D,

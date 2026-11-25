@@ -381,6 +381,7 @@ public:
 		f.builder = &p_builder;
 		f.ot = &p_ot;
 		f.stats = &r_stats;
+		f.depth = depth_triangles;
 		f.width = p_width;
 		f.height = p_height;
 		f.world = settings.world_scale;
@@ -532,6 +533,7 @@ private:
 		psx::PacketBuilder *builder = nullptr;
 		psx::OrderingTable *ot = nullptr;
 		PSXSceneStats *stats = nullptr;
+		std::vector<psx::DepthTriangle> *depth = nullptr; // depth_triangles for this frame
 		Transform3D cam_inv;
 		Basis cam_basis; // Camera rotation in world space (billboards)
 		double row_scale[3] = { 1.0, -1.0, -1.0 }; // A * C
@@ -587,6 +589,13 @@ private:
 		Color mean = Color(0, 0, 0); // sRGB, over the whole sphere: ambient light, orthographic cameras
 	};
 	SkyInfo sky;
+
+public:
+	// When set, build() records the opaque triangles of the scene's objects
+	// (not the sky) here, for a depth image under the editor's helpers.
+	std::vector<psx::DepthTriangle> *depth_triangles = nullptr;
+
+private:
 	uint32_t sky_mesh_key = 0;
 	psx::MeshData sky_mesh;
 	SourceSurface sky_source; // UV bounds for the panorama's texture lookup
@@ -914,6 +923,7 @@ private:
 			params.screen_width = f.width;
 			params.screen_height = f.height;
 			params.point_size = MAX(1, (int)Math::round(mat.point_size)) * f.gte.scale;
+			params.depth = f.depth;
 			psx::draw_mesh(f.gte, *f.builder, *f.ot, *data, params, f.stats->draw);
 		}
 	}

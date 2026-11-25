@@ -865,6 +865,16 @@ void draw_mesh(GTE &p_gte, PacketBuilder &p_builder, OrderingTable &p_ot, const 
 				p_ot.add(otz, order[k]);
 			}
 			r_stats.packets += count;
+			if (p_params.depth && !tri_semi) {
+				DepthTriangle d;
+				for (int i = 0; i < 3; i++) {
+					d.x[i] = xs[i];
+					d.y[i] = ys[i];
+					d.z[i] = zs[i];
+				}
+				d.otz = otz;
+				p_params.depth->push_back(d);
+			}
 			if (tex) {
 				r_stats.textured++;
 				r_stats.windowed += windowed ? 1 : 0;
@@ -874,6 +884,45 @@ void draw_mesh(GTE &p_gte, PacketBuilder &p_builder, OrderingTable &p_ot, const 
 		}
 	}
 	p_gte.far_color = far_color;
+}
+
+void paint_depth(const std::vector<DepthTriangle> &p_triangles, int32_t p_width, int32_t p_height, std::vector<uint16_t> &r_depth) {
+	r_depth.assign((size_t)std::max(p_width, 0) * std::max(p_height, 0), 0);
+	std::vector<uint32_t> order(p_triangles.size());
+	for (uint32_t i = 0; i < order.size(); i++) {
+		order[i] = i;
+	}
+	std::sort(order.begin(), order.end(), [&](uint32_t p_a, uint32_t p_b) {
+		const uint32_t za = p_triangles[p_a].otz, zb = p_triangles[p_b].otz;
+		return za != zb ? za > zb : p_a > p_b;
+	});
+	for (uint32_t index : order) {
+		const DepthTriangle &t = p_triangles[index];
+		const double x0 = t.x[0], y0 = t.y[0], x1 = t.x[1], y1 = t.y[1], x2 = t.x[2], y2 = t.y[2];
+		const double area = (x1 - x0) * (y2 - y0) - (x2 - x0) * (y1 - y0);
+		if (area == 0.0) {
+			continue;
+		}
+		const int32_t left = std::max(0, std::min(t.x[0], std::min(t.x[1], t.x[2])));
+		const int32_t right = std::min(p_width - 1, std::max(t.x[0], std::max(t.x[1], t.x[2])));
+		const int32_t top = std::max(0, std::min(t.y[0], std::min(t.y[1], t.y[2])));
+		const int32_t bottom = std::min(p_height - 1, std::max(t.y[0], std::max(t.y[1], t.y[2])));
+		for (int32_t y = top; y <= bottom; y++) {
+			const double py = y + 0.5;
+			for (int32_t x = left; x <= right; x++) {
+				const double px = x + 0.5;
+				// Barycentric weights; all of one sign inside.
+				const double w0 = ((x1 - px) * (y2 - py) - (x2 - px) * (y1 - py)) / area;
+				const double w1 = ((x2 - px) * (y0 - py) - (x0 - px) * (y2 - py)) / area;
+				const double w2 = 1.0 - w0 - w1;
+				if (w0 < 0.0 || w1 < 0.0 || w2 < 0.0) {
+					continue;
+				}
+				const double z = w0 * t.z[0] + w1 * t.z[1] + w2 * t.z[2];
+				r_depth[(size_t)y * p_width + x] = (uint16_t)std::clamp(std::lround(z), 1L, 65535L);
+			}
+		}
+	}
 }
 
 } // namespace psx
