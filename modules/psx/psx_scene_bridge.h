@@ -31,13 +31,18 @@
 #include "psx_settings.h"
 #include "psx_texture_resource.h"
 
+#include "core/config/project_settings.h"
 #include "core/io/image.h"
+#include "core/variant/callable.h"
 #include "core/os/os.h"
 #include "core/math/projection.h"
 #include "core/math/transform_3d.h"
 #include "core/templates/hash_map.h"
+#include "core/templates/hash_set.h"
 #include "core/templates/local_vector.h"
 #include "servers/rendering/renderer_geometry_instance.h"
+
+#include <memory>
 #include "servers/rendering/renderer_rd/renderer_scene_render_rd.h"
 #include "servers/rendering/renderer_rd/storage_rd/light_storage.h"
 #include "servers/rendering/renderer_rd/storage_rd/material_storage.h"
@@ -124,6 +129,37 @@ struct PSXMaterialInfo {
 // (psx_compositor_rd.cpp). MaterialData holds the render priority.
 template <class ShaderDataT>
 struct PSXMaterialDataOf;
+
+// A GPU buffer read finished by RenderingDevice::buffer_get_data_async. The
+// slot is shared, so a read delivered late writes to memory still owned.
+struct PSXDownload {
+	Vector<uint8_t> data;
+	bool done = false;
+};
+
+class PSXDownloadCallable : public CallableCustom {
+	std::shared_ptr<PSXDownload> slot;
+
+	static bool _equal(const CallableCustom *p_a, const CallableCustom *p_b) { return p_a == p_b; }
+	static bool _less(const CallableCustom *p_a, const CallableCustom *p_b) { return p_a < p_b; }
+
+public:
+	explicit PSXDownloadCallable(const std::shared_ptr<PSXDownload> &p_slot) :
+			slot(p_slot) {}
+	uint32_t hash() const override { return hash_murmur3_one_64((uint64_t)(uintptr_t)slot.get()); }
+	String get_as_text() const override { return "PSXDownload"; }
+	CompareEqualFunc get_compare_equal_func() const override { return _equal; }
+	CompareLessFunc get_compare_less_func() const override { return _less; }
+	bool is_valid() const override { return true; }
+	ObjectID get_object() const override { return ObjectID(); }
+	void call(const Variant **p_arguments, int p_argcount, Variant &r_return_value, Callable::CallError &r_call_error) const override {
+		r_call_error.error = Callable::CallError::CALL_OK;
+		if (p_argcount > 0) {
+			slot->data = *p_arguments[0];
+			slot->done = true;
+		}
+	}
+};
 
 // What psx_read_material takes from a compiled shader (not its materials'
 // parameters): read once per shader and code, since finding it means
@@ -510,6 +546,7 @@ public:
 		f.cam_inv = p_camera.main_transform.affine_inverse();
 		f.cam_basis = p_camera.main_transform.basis.orthonormalized();
 		RendererRD::MeshStorage *mesh_storage = RendererRD::MeshStorage::get_singleton();
+		_prefetch_meshes(mesh_storage, p_instances);
 
 		for (uint32_t i = 0; i < p_instances.size(); i++) {
 			const RenderGeometryInstanceBase *inst = static_cast<const RenderGeometryInstanceBase *>(p_instances[i]);
@@ -531,6 +568,7 @@ public:
 			}
 		}
 		_draw_sky(f);
+		fetched.clear(); // Fetched for a mesh not drawn after all
 		_evict();
 		r_stats.textures_resident = 0;
 		r_stats.textures_baked = 0;
@@ -1266,6 +1304,162 @@ private:
 		return hash_fmix32(h);
 	}
 
+	// Whether p_mesh is new or its surfaces changed since they were read.
+	bool _mesh_needs_read(RendererRD::MeshStorage *p_storage, RID p_mesh) {
+		const int surface_count = p_storage->mesh_get_surface_count(p_mesh);
+		const MeshEntry *entry = meshes.getptr(p_mesh);
+		return !entry || entry->signature != _mesh_signature(p_storage, p_mesh, surface_count) || (int)entry->surfaces.size() != surface_count;
+	}
+
+	// Surface data read back for meshes about to be read (_get_mesh takes it).
+	HashMap<RID, LocalVector<RenderingServerTypes::SurfaceData>> fetched;
+
+	// Reads the surfaces of p_meshes back from the GPU into fetched. Every
+	// buffer read waits for the GPU to finish all its work, a few
+	// milliseconds, and a surface has several buffers (and LOD index buffers
+	// the PS1 never uses), so the buffers are queued as asynchronous reads
+	// and one synchronous read waits once for all of them. Batches stay
+	// well inside the download staging space, beyond which RenderingDevice
+	// would flush part way through a read. Meshes with blend shapes (whose
+	// buffer is not exposed) and anything a batch could not take are read
+	// the slow way.
+	void _fetch_surfaces(RendererRD::MeshStorage *p_storage, const LocalVector<RID> &p_meshes) {
+		RD *rd = RD::get_singleton();
+		const RendererRD::MeshStorage *reader = p_storage; // The const mesh_get_surface reads back
+		const uint64_t staging_mb = (uint64_t)MAX(1, (int)GLOBAL_GET("rendering/rendering_device/staging_buffer/max_size_mb"));
+		const uint64_t budget = staging_mb * 1024 * 1024 / 4;
+		struct Part {
+			RID mesh;
+			uint32_t surface = 0;
+			int which = 0; // 0 vertex, 1 attribute, 2 skin, 3 index
+			RID buffer;
+			std::shared_ptr<PSXDownload> slot;
+		};
+		LocalVector<Part> parts;
+		uint64_t batch_bytes = 0;
+		RID trigger; // A vertex buffer of this batch (at least 12 bytes)
+		auto finish = [&]() {
+			if (parts.is_empty()) {
+				return;
+			}
+			if (trigger.is_valid()) {
+				rd->buffer_get_data(trigger, 0, 4); // The one wait: queued reads arrive in it.
+			}
+			for (Part &part : parts) {
+				if (!part.slot->done) {
+					part.slot->data = rd->buffer_get_data(part.buffer); // Not delivered: read it now.
+				}
+				RenderingServerTypes::SurfaceData &sd = fetched[part.mesh][part.surface];
+				switch (part.which) {
+					case 0:
+						sd.vertex_data = part.slot->data;
+						// As MeshStorage::mesh_get_surface: uncompressed normals
+						// without tangents are stored with 4 bytes of padding.
+						if (!(sd.format & RSE::ARRAY_FLAG_COMPRESS_ATTRIBUTES) && (sd.format & RSE::ARRAY_FORMAT_NORMAL) && !(sd.format & RSE::ARRAY_FORMAT_TANGENT) && sd.vertex_data.size() >= 4) {
+							sd.vertex_data.resize(sd.vertex_data.size() - sizeof(uint16_t) * 2);
+						}
+						break;
+					case 1:
+						sd.attribute_data = part.slot->data;
+						break;
+					case 2:
+						sd.skin_data = part.slot->data;
+						break;
+					default:
+						sd.index_data = part.slot->data;
+						break;
+				}
+			}
+			parts.clear();
+			batch_bytes = 0;
+			trigger = RID();
+		};
+		for (const RID &mesh : p_meshes) {
+			const int count = p_storage->mesh_get_surface_count(mesh);
+			LocalVector<RenderingServerTypes::SurfaceData> &out = fetched.insert(mesh, LocalVector<RenderingServerTypes::SurfaceData>())->value;
+			out.resize(count);
+			const bool shapes = p_storage->mesh_get_blend_shape_count(mesh) > 0;
+			for (int i = 0; i < count; i++) {
+				void *surface = p_storage->mesh_get_surface(mesh, (uint32_t)i);
+				if (!surface) {
+					continue;
+				}
+				RenderingServerTypes::SurfaceData &sd = out[i];
+				sd.format = p_storage->mesh_surface_get_format(surface);
+				sd.vertex_count = p_storage->mesh_surface_get_vertex_count(surface);
+				sd.primitive = p_storage->mesh_surface_get_primitive(surface);
+				sd.aabb = p_storage->mesh_surface_get_aabb(surface);
+				sd.uv_scale = p_storage->mesh_surface_get_uv_scale(surface);
+				const RID buffers[4] = {
+					p_storage->mesh_surface_get_vertex_buffer_rd_rid(mesh, i),
+					p_storage->mesh_surface_get_attribute_buffer_rd_rid(mesh, i),
+					p_storage->mesh_surface_get_skin_buffer_rd_rid(mesh, i),
+					p_storage->mesh_surface_get_index_buffer_rd_rid(mesh, i),
+				};
+				sd.index_count = buffers[3].is_valid() ? p_storage->mesh_surface_get_vertices_drawn_count(surface) : 0;
+				// Generous: no vertex format takes 256 bytes.
+				const uint64_t estimate = (uint64_t)sd.vertex_count * 256 + (uint64_t)sd.index_count * 4 + 64;
+				if (shapes || estimate > budget || !buffers[0].is_valid()) {
+					out[i] = reader->mesh_get_surface(mesh, i);
+					continue;
+				}
+				if (batch_bytes + estimate > budget) {
+					finish();
+				}
+				for (int w = 0; w < 4; w++) {
+					if (!buffers[w].is_valid()) {
+						continue;
+					}
+					Part part;
+					part.mesh = mesh;
+					part.surface = (uint32_t)i;
+					part.which = w;
+					part.buffer = buffers[w];
+					part.slot = std::make_shared<PSXDownload>();
+					if (rd->buffer_get_data_async(buffers[w], Callable(memnew(PSXDownloadCallable(part.slot)))) != OK) {
+						part.slot->data = rd->buffer_get_data(buffers[w]);
+						part.slot->done = true;
+					}
+					parts.push_back(part);
+				}
+				trigger = buffers[0];
+				batch_bytes += estimate;
+			}
+		}
+		finish();
+	}
+
+	// Reads, in one batch, every mesh the instances will draw that is new
+	// or changed (particle draw passes are read when drawn).
+	void _prefetch_meshes(RendererRD::MeshStorage *p_storage, const PagedArray<RenderGeometryInstance *> &p_instances) {
+		LocalVector<RID> wanted;
+		HashSet<RID> seen;
+		for (uint32_t i = 0; i < p_instances.size(); i++) {
+			const RenderGeometryInstanceBase *inst = static_cast<const RenderGeometryInstanceBase *>(p_instances[i]);
+			if (!inst->data || (inst->layer_mask & USER_LAYERS) == 0) {
+				continue;
+			}
+			RID mesh;
+			if (inst->data->base_type == RSE::INSTANCE_MESH) {
+				mesh = inst->data->base;
+			} else if (inst->data->base_type == RSE::INSTANCE_MULTIMESH) {
+				mesh = p_storage->_multimesh_get_mesh(inst->data->base);
+			}
+			if (mesh.is_valid() && p_storage->owns_mesh(mesh) && !seen.has(mesh)) {
+				seen.insert(mesh);
+				if (_mesh_needs_read(p_storage, mesh)) {
+					wanted.push_back(mesh);
+				}
+			}
+		}
+		if (wanted.is_empty()) {
+			return;
+		}
+		PSXSceneStats &st = active_stats ? *active_stats : unused_stats;
+		PSXScopedTimer timer(st.mesh_read_usec);
+		_fetch_surfaces(p_storage, wanted);
+	}
+
 	MeshEntry *_get_mesh(RendererRD::MeshStorage *p_storage, RID p_mesh) {
 		const AABB aabb = p_storage->mesh_get_aabb(p_mesh);
 		const int surface_count = p_storage->mesh_get_surface_count(p_mesh);
@@ -1276,10 +1470,19 @@ private:
 			entry->last_used = frame;
 			return entry;
 		}
-		// New or changed: read every surface back from the mesh storage.
+		// New or changed: read every surface back from the mesh storage
+		// (already fetched with the others this frame, or now).
 		PSXSceneStats &st = active_stats ? *active_stats : unused_stats;
 		PSXScopedTimer timer(st.mesh_read_usec);
 		st.meshes_read++;
+		LocalVector<RenderingServerTypes::SurfaceData> *surface_data = fetched.getptr(p_mesh);
+		if (!surface_data || (int)surface_data->size() != surface_count) {
+			fetched.erase(p_mesh);
+			LocalVector<RID> one;
+			one.push_back(p_mesh);
+			_fetch_surfaces(p_storage, one);
+			surface_data = fetched.getptr(p_mesh);
+		}
 		if (!entry) {
 			entry = &meshes.insert(p_mesh, MeshEntry())->value;
 		}
@@ -1292,8 +1495,7 @@ private:
 		entry->surfaces.clear();
 		entry->surfaces.resize(surface_count);
 		for (int i = 0; i < surface_count; i++) {
-			// The const overload reads the surface back; the other returns a raw pointer.
-			const RenderingServerTypes::SurfaceData sd = static_cast<const RendererRD::MeshStorage *>(p_storage)->mesh_get_surface(p_mesh, i);
+			const RenderingServerTypes::SurfaceData &sd = (*surface_data)[i];
 			if (sd.vertex_count == 0 || sd.primitive >= RSE::PRIMITIVE_MAX) {
 				continue;
 			}
@@ -1359,6 +1561,7 @@ private:
 			}
 			_read_blend_shapes(sd, dst);
 		}
+		fetched.erase(p_mesh);
 		return entry;
 	}
 

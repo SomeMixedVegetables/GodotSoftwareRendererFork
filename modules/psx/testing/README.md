@@ -297,6 +297,13 @@ preview)`.
   `crowd` scene, of a 4 ms frame). Only their positions and normals are
   converted again; colours, UVs and the triangles come from their rest pose,
   so subdivision splits a skinned mesh's polygons by their rest-pose size.
+- A mesh is read back from Godot the first frame it is drawn (and again
+  only when its surfaces change). All the meshes new in a frame are read in
+  one batch, which waits for the GPU once (about 5 ms for the 22 meshes of
+  `ext_models`); meshes with blend shapes are read one buffer at a time,
+  which waits for each. Textures are read back and converted the first
+  time they are used too (about 25 ms for 100 textures); `PSXTexture`
+  resources baked at import skip that.
 - Textures have no mipmaps or filtering (nearest texel, affine mapping, as
   on the PS1), so fine detail shimmers at a distance.
 - Textures larger than `textures/max_size` (256 at most) are scaled down.
