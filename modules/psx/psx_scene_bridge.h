@@ -32,6 +32,7 @@
 #include "psx_texture_resource.h"
 
 #include "core/io/image.h"
+#include "core/os/os.h"
 #include "core/math/projection.h"
 #include "core/math/transform_3d.h"
 #include "core/templates/hash_map.h"
@@ -301,7 +302,29 @@ struct PSXSceneStats {
 	uint32_t shared_slots = 0; // Uses of a CLUT or texel box beyond its first (shared palettes, swaps)
 	uint32_t vram_free_percent = 100; // Of all texture banks in use
 	uint32_t texture_banks = 1;
+	// Time spent this frame turning Godot data into PS1 data (print_stats:
+	// PSX_CONVERT), and how many were done. Reads copy meshes and images
+	// back from Godot's storage; conversions build the PS1 versions; skin is
+	// the CPU skinning of every skinned surface drawn (redone each frame).
+	uint64_t mesh_read_usec = 0;
+	uint64_t mesh_convert_usec = 0;
+	uint64_t skin_usec = 0;
+	uint64_t texture_read_usec = 0;
+	uint64_t texture_convert_usec = 0;
+	uint32_t meshes_read = 0;
+	uint32_t meshes_converted = 0;
+	uint32_t textures_read = 0;
+	uint32_t textures_converted = 0;
 	psx::DrawStats draw;
+};
+
+// Adds the time from construction to destruction to a counter.
+struct PSXScopedTimer {
+	uint64_t &total;
+	const uint64_t begin;
+	explicit PSXScopedTimer(uint64_t &p_total) :
+			total(p_total), begin(OS::get_singleton()->get_ticks_usec()) {}
+	~PSXScopedTimer() { total += OS::get_singleton()->get_ticks_usec() - begin; }
 };
 
 template <class ShaderDataT>
@@ -311,6 +334,10 @@ public:
 	static constexpr uint64_t CACHE_KEEP_FRAMES = 300;
 
 	PSXSceneSettings settings;
+	// The frame's stats while build() runs, for helpers that are not passed
+	// them (mesh and image read-back).
+	PSXSceneStats *active_stats = nullptr;
+	PSXSceneStats unused_stats;
 
 	// Layers 1-20, the ones a VisualInstance3D can be put on.
 	static constexpr uint32_t USER_LAYERS = (1u << 20) - 1;
@@ -331,6 +358,7 @@ public:
 			const PagedArray<RID> &p_lights, RID p_environment, int32_t p_width, int32_t p_height, psx::GPU &p_gpu,
 			psx::PacketBuilder &p_builder, psx::OrderingTable &p_ot, uint64_t p_frame, PSXSceneStats &r_stats) {
 		r_stats = PSXSceneStats();
+		active_stats = &r_stats;
 		frame = p_frame;
 		gpu = &p_gpu;
 		const int vram_scale = p_gpu.get_scale();
@@ -449,7 +477,8 @@ private:
 	};
 
 	struct MeshEntry {
-		AABB aabb;
+		AABB aabb; // The mesh's current bounds (posed, for skinned meshes)
+		uint32_t signature = 0; // _mesh_signature when the surfaces were read
 		LocalVector<SourceSurface> surfaces;
 		HashMap<uint64_t, psx::MeshData> converted;
 		uint64_t last_used = 0;
@@ -849,6 +878,7 @@ private:
 	// Linear-blend skinning on the CPU, then a fresh conversion (not cached:
 	// the pose changes every frame). Returns nullptr if nothing to draw.
 	const psx::MeshData *_skin(const SourceSurface &p_src, const PSXMaterialInfo &p_mat, const psx::TextureData *p_texture, const Vector3 &p_normal_scale, double p_scale, Frame &f) {
+		PSXScopedTimer timer(f.stats->skin_usec);
 		const uint32_t n = p_src.vertex_count;
 		const int inf = p_src.influences;
 		const bool has_normals = !p_src.normals.is_empty();
@@ -932,19 +962,48 @@ private:
 		return opt;
 	}
 
+	// What says a mesh's surfaces changed (added, replaced or cleared): each
+	// surface's storage, bounds, vertex count and format. Not the mesh AABB:
+	// Godot overwrites that with the posed bounds of a skinned mesh every
+	// frame it is drawn, which made every animated mesh read back again.
+	static uint32_t _mesh_signature(RendererRD::MeshStorage *p_storage, RID p_mesh, int p_surface_count) {
+		uint32_t h = hash_murmur3_one_32((uint32_t)p_surface_count);
+		for (int i = 0; i < p_surface_count; i++) {
+			void *surface = p_storage->mesh_get_surface(p_mesh, (uint32_t)i); // The storage pointer, not the read-back overload
+			h = hash_murmur3_one_64((uint64_t)(uintptr_t)surface, h);
+			if (!surface) {
+				continue;
+			}
+			const AABB b = p_storage->mesh_surface_get_aabb(surface);
+			for (int a = 0; a < 3; a++) {
+				h = hash_murmur3_one_float((float)b.position[a], h);
+				h = hash_murmur3_one_float((float)b.size[a], h);
+			}
+			h = hash_murmur3_one_32(p_storage->mesh_surface_get_vertex_count(surface), h);
+			h = hash_murmur3_one_64(p_storage->mesh_surface_get_format(surface), h);
+		}
+		return hash_fmix32(h);
+	}
+
 	MeshEntry *_get_mesh(RendererRD::MeshStorage *p_storage, RID p_mesh) {
 		const AABB aabb = p_storage->mesh_get_aabb(p_mesh);
 		const int surface_count = p_storage->mesh_get_surface_count(p_mesh);
+		const uint32_t signature = _mesh_signature(p_storage, p_mesh, surface_count);
 		MeshEntry *entry = meshes.getptr(p_mesh);
-		if (entry && entry->aabb == aabb && (int)entry->surfaces.size() == surface_count) {
+		if (entry && entry->signature == signature && (int)entry->surfaces.size() == surface_count) {
+			entry->aabb = aabb;
 			entry->last_used = frame;
 			return entry;
 		}
 		// New or changed: read every surface back from the mesh storage.
+		PSXSceneStats &st = active_stats ? *active_stats : unused_stats;
+		PSXScopedTimer timer(st.mesh_read_usec);
+		st.meshes_read++;
 		if (!entry) {
 			entry = &meshes.insert(p_mesh, MeshEntry())->value;
 		}
 		entry->aabb = aabb;
+		entry->signature = signature;
 		entry->last_used = frame;
 		entry->converted.clear();
 		entry->surfaces.clear();
@@ -1041,8 +1100,12 @@ private:
 		const psx::MeshInput in = _input(p_entry.surfaces[p_surface]);
 		const psx::ConvertOptions opt = _options(p_mat, p_texture, p_normal_scale, p_scale);
 		psx::MeshData &out = p_entry.converted.insert(key, psx::MeshData())->value;
-		psx::convert_mesh(in, opt, out); // Empty on failure: remembered, not retried.
+		{
+			PSXScopedTimer timer(r_stats.mesh_convert_usec);
+			psx::convert_mesh(in, opt, out); // Empty on failure: remembered, not retried.
+		}
 		r_stats.conversions++;
+		r_stats.meshes_converted++;
 		if (out.clamped) {
 			WARN_PRINT_ONCE("PSX: a mesh is too large for 16-bit GTE coordinates and was clamped; lower rendering/psx/world_scale or split the mesh.");
 		}
@@ -1202,8 +1265,12 @@ private:
 		{
 			use->version = version;
 			psx::TextureData data;
-			use->valid = _convert_texture(image, Rect2i(start[0], start[1], extent[0], extent[1]), p_mat, ts->texture_is_render_target(p_mat.texture), p_pal, data);
+			{
+				PSXScopedTimer timer(r_stats.texture_convert_usec);
+				use->valid = _convert_texture(image, Rect2i(start[0], start[1], extent[0], extent[1]), p_mat, ts->texture_is_render_target(p_mat.texture), p_pal, data);
+			}
 			r_stats.conversions++;
+			r_stats.textures_converted++;
 			if (use->valid) {
 				for (int a = 0; a < 2; a++) {
 					use->uv_scale[a] = (real_t)size[a] / extent[a];
@@ -1241,6 +1308,9 @@ private:
 			found = &source_images.insert(p_texture, SourceImage())->value;
 		}
 		SourceImage &entry = *found;
+		PSXSceneStats &st = active_stats ? *active_stats : unused_stats;
+		PSXScopedTimer timer(st.texture_read_usec);
+		st.textures_read++;
 		entry.image = Ref<Image>();
 		entry.version = version;
 		entry.last_used = frame;

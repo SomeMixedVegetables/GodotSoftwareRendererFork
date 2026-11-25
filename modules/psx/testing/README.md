@@ -41,7 +41,7 @@ window frames, `-Stats`, `-Dev`, `-ModelsDir <folder>`, `-ModelsPerCategory 2`.
 | `palettes` | PSXPalette: three textures baked with one generated 16-entry palette (one with cut-out holes), the first with the palette swapped per material (same, warm, grey), and a runtime texture converted to the palette next to one with its own. The check also reads `PSX_TEXTURES`: 5 CLUTs and 5 shared slots (one CLUT for the palette, texels shared by the swaps) |
 | `texture_dither` | Ordered texture dither: a gradient with an 8-colour palette, a dark gradient at 15-bit and a gradient with a fixed 4-colour PSXPalette, baked without (top) and with (middle) dither; runtime textures dithered by `rendering/psx/textures/dither` (bottom, set in its `.override.cfg`) |
 | `particles_anim` | Particle animation frames (a 4 x 2 sheet, frames picked by custom data Z, clamped and looped) and per-instance MultiMesh colours on a material that uses vertex colour |
-| `skinned` | A two-bone mesh built in code, bent every frame (CPU skinning) |
+| `skinned` | A two-bone mesh built in code, bent every frame (CPU skinning). Also fails if the mesh is read back from Godot again after its first frame (`meshes_settled`) |
 | `sprites` | Sprite3D, AnimatedSprite3D and Label3D, with and without billboarding, and a billboard material |
 | `shaders` | ShaderMaterial: colour and texture uniforms, unshaded, alpha, vertex displacement, computed colour |
 | `split` | Two SubViewports on one world (split screen) and a third with its own world |
@@ -80,8 +80,9 @@ Frame N of the raw dumps and frame N of the movie are the same moment.
 
 Some scenes add checks: `baked_in_use` (the baked texture count),
 `script` (a line the scene's script prints), `psx_off` (no PSX frames
-when the scene turns the PS1 view off) and `textures_settled` (no texture
-uploads in each viewport's last frame).
+when the scene turns the PS1 view off), `textures_settled` (no texture
+uploads in each viewport's last frame) and `meshes_settled` (no mesh read
+back from Godot in the last two frames: `skinned`).
 
 ## Unit tests
 
@@ -129,7 +130,7 @@ work in any project:
 | `rendering/psx/debug/demo_scene` | Draw the built-in test cube instead of the scene |
 | `rendering/psx/debug/dump_dir` | Folder to save raw PSX frames to |
 | `rendering/psx/debug/dump_frames` | How many frames to save, from frame 0 |
-| `rendering/psx/debug/print_stats` | One `PSX_STATS` and one `PSX_SCENE` line per frame: timings, instances, triangles in and culled by reason |
+| `rendering/psx/debug/print_stats` | One `PSX_STATS` and one `PSX_SCENE` line per frame: timings, instances, triangles in and culled by reason. `PSX_CONVERT`: time spent reading meshes and images back from Godot, converting them, and skinning, with counts |
 
 ## Texture memory
 

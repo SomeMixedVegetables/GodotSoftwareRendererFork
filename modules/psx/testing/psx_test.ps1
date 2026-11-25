@@ -109,6 +109,10 @@ $ExpectSettled = @('texture_stress')
 # Values the last PSX_TEXTURES line must report (its override.cfg turns on
 # print_stats): palettes share CLUTs, palette swaps share texels.
 $ExpectTextureStats = @{ 'palettes' = @{ 'cluts' = 5; 'shared' = 5 } }
+# Scenes whose meshes must not be read back again once drawn (the last two
+# PSX_CONVERT lines report meshes_read=0): an animated skinned mesh used to
+# be read back every frame. Their override.cfg turns on print_stats.
+$ExpectMeshesSettled = @('skinned')
 
 function Get-GoldenDir([string]$SceneName) {
 	if ($GoldenAliases.ContainsKey($SceneName)) { $SceneName = $GoldenAliases[$SceneName] }
@@ -343,6 +347,13 @@ function Invoke-Check([string]$SceneName) {
 		$settled = $tex.Count -eq 2 -and -not ($uploads | Where-Object { $_ -ne 0 })
 		Write-Result "PSX_CHECK scene=$SceneName image=textures_settled result=$(if ($settled) {'pass'} else {'fail'}) uploads=$($uploads -join ',') fallbacks=$($fallbacks -join ',')"
 		$results += $settled
+	}
+	if ($ExpectMeshesSettled -contains $SceneName) {
+		$conv = @($s.psx_lines | Where-Object { $_ -match '^PSX_CONVERT' } | Select-Object -Last 2)
+		$reads = @($conv | ForEach-Object { if ($_ -match 'meshes_read=(\d+)') { [int]$Matches[1] } else { -1 } })
+		$meshOk = $reads.Count -eq 2 -and ($reads | Where-Object { $_ -ne 0 }).Count -eq 0
+		Write-Result "PSX_CHECK scene=$SceneName image=meshes_settled result=$(if ($meshOk) {'pass'} else {'fail'}) meshes_read=$($reads -join ',')"
+		$results += $meshOk
 	}
 	if ($ExpectTextureStats.ContainsKey($SceneName)) {
 		$tex = @($s.psx_lines | Where-Object { $_ -match '^PSX_TEXTURES' } | Select-Object -Last 1)
