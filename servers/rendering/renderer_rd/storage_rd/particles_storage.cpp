@@ -1736,6 +1736,23 @@ Dependency *ParticlesStorage::particles_get_dependency(RID p_particles) const {
 	return &particles->dependency;
 }
 
+Vector<uint8_t> ParticlesStorage::particles_get_instance_data(RID p_particles, uint32_t &r_amount, uint32_t &r_trail_steps) const {
+	r_amount = 0;
+	r_trail_steps = 1;
+	const Particles *particles = particles_owner.get_or_null(p_particles);
+	ERR_FAIL_NULL_V(particles, Vector<uint8_t>());
+	if (particles->mode != RSE::PARTICLES_MODE_3D || particles->particle_instance_buffer.is_null() || particles->frame_counter == 0) {
+		return Vector<uint8_t>();
+	}
+	if (particles->trails_enabled && particles->trail_bind_poses.size() > 1) {
+		r_trail_steps = particles->trail_bind_poses.size();
+	}
+	const uint32_t total = particles->amount * r_trail_steps;
+	const uint32_t stride = (3 + 1 + 1) * sizeof(float) * 4;
+	r_amount = total;
+	return RD::get_singleton()->buffer_get_data(particles->particle_instance_buffer, particles->instance_motion_vectors_current_offset * stride, total * stride);
+}
+
 bool ParticlesStorage::particles_is_inactive(RID p_particles) const {
 	const Particles *particles = particles_owner.get_or_null(p_particles);
 	ERR_FAIL_NULL_V(particles, false);

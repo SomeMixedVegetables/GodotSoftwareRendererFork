@@ -40,6 +40,7 @@ window frames, `-Stats`, `-Dev`, `-ModelsDir <folder>`, `-ModelsPerCategory 2`.
 | `particles` | Particle billboards on a MultiMesh with custom data (as CPUParticles3D makes them): each arrow turned by its custom data X, as in Godot |
 | `palettes` | PSXPalette: three textures baked with one generated 16-entry palette (one with cut-out holes), the first with the palette swapped per material (same, warm, grey), and a runtime texture converted to the palette next to one with its own. The check also reads `PSX_TEXTURES`: 5 CLUTs and 5 shared slots (one CLUT for the palette, texels shared by the swaps) |
 | `texture_dither` | Ordered texture dither: a gradient with an 8-colour palette, a dark gradient at 15-bit and a gradient with a fixed 4-colour PSXPalette, baked without (top) and with (middle) dither; runtime textures dithered by `rendering/psx/textures/dither` (bottom, set in its `.override.cfg`) |
+| `gpu_particles` | GPUParticles3D built from nodes: billboards coloured by a ramp (local coordinates), spinning cubes (global coordinates) and an emitter with two draw passes, fixed seed. Also fails if the last `PSX_CONVERT` line reports no particles drawn (`particles_drawn`) |
 | `particles_anim` | Particle animation frames (a 4 x 2 sheet, frames picked by custom data Z, clamped and looped) and per-instance MultiMesh colours on a material that uses vertex colour |
 | `skinned` | A two-bone mesh built in code, bent every frame (CPU skinning). Also fails if the mesh is read back from Godot again after its first frame (`meshes_settled`) |
 | `blend_shapes` | Meshes with two blend shapes built in code, weights changed every frame (CPU blend shapes): normalized (left), relative (middle), and on a skinned mesh (right). Also fails if a mesh is read back again after its first frame (`meshes_settled`) |
@@ -82,8 +83,9 @@ Frame N of the raw dumps and frame N of the movie are the same moment.
 Some scenes add checks: `baked_in_use` (the baked texture count),
 `script` (a line the scene's script prints), `psx_off` (no PSX frames
 when the scene turns the PS1 view off), `textures_settled` (no texture
-uploads in each viewport's last frame) and `meshes_settled` (no mesh read
-back from Godot in the last two frames: `skinned`, `blend_shapes`).
+uploads in each viewport's last frame), `meshes_settled` (no mesh read
+back from Godot in the last two frames: `skinned`, `blend_shapes`) and
+`particles_drawn` (the last frame drew GPUParticles3D particles: `gpu_particles`).
 
 ## Unit tests
 
@@ -252,9 +254,11 @@ preview)`.
 - Of the environment, only ambient light, the background colour and depth or
   exponential fog are read. Sky textures, glow, tonemapping, SSAO, volumetric
   fog and global illumination (SDFGI, VoxelGI, lightmaps) are ignored.
-- Decals and blend shapes are not drawn. Particles draw through their
-  MultiMesh (CPUParticles3D), with billboard spin, animation frames and
-  instance colours; GPUParticles3D is not drawn.
+- Decals are not drawn. CPUParticles3D draws through its MultiMesh, with
+  billboard spin, animation frames and instance colours. GPUParticles3D is
+  simulated by Godot on the GPU and its particles are read back every frame
+  (which waits for the GPU) and drawn the same way; their trails are not
+  drawn.
 - Triangles that cross the near plane are clipped there, and ones too big
   for the GPU are split, so the GTE and GPU limits do not drop them.
 - A ViewportTexture is read back from the GPU and converted (at 15-bit) every

@@ -112,10 +112,10 @@ struct PSXDebug {
 	}
 
 	// Time spent converting Godot data this frame (PSXSceneStats).
-	void report_convert(uint64_t p_frame, uint64_t p_mesh_read, uint32_t p_meshes_read, uint64_t p_mesh_convert, uint32_t p_meshes_converted, uint64_t p_skin, uint32_t p_skinned, uint64_t p_tex_read, uint32_t p_tex_reads, uint64_t p_tex_convert, uint32_t p_tex_converted) const {
+	void report_convert(uint64_t p_frame, uint64_t p_mesh_read, uint32_t p_meshes_read, uint64_t p_mesh_convert, uint32_t p_meshes_converted, uint64_t p_skin, uint32_t p_skinned, uint64_t p_tex_read, uint32_t p_tex_reads, uint64_t p_tex_convert, uint32_t p_tex_converted, uint64_t p_particles_read, uint32_t p_particles) const {
 		if (print_stats) {
-			print_line(vformat("PSX_CONVERT frame=%d mesh_read_us=%d meshes_read=%d mesh_convert_us=%d meshes_converted=%d skin_us=%d skinned=%d texture_read_us=%d textures_read=%d texture_convert_us=%d textures_converted=%d",
-					(int64_t)p_frame, (int64_t)p_mesh_read, p_meshes_read, (int64_t)p_mesh_convert, p_meshes_converted, (int64_t)p_skin, p_skinned, (int64_t)p_tex_read, p_tex_reads, (int64_t)p_tex_convert, p_tex_converted));
+			print_line(vformat("PSX_CONVERT frame=%d mesh_read_us=%d meshes_read=%d mesh_convert_us=%d meshes_converted=%d skin_us=%d skinned=%d texture_read_us=%d textures_read=%d texture_convert_us=%d textures_converted=%d particles_read_us=%d particles=%d",
+					(int64_t)p_frame, (int64_t)p_mesh_read, p_meshes_read, (int64_t)p_mesh_convert, p_meshes_converted, (int64_t)p_skin, p_skinned, (int64_t)p_tex_read, p_tex_reads, (int64_t)p_tex_convert, p_tex_converted, (int64_t)p_particles_read, p_particles));
 		}
 	}
 

@@ -113,6 +113,9 @@ $ExpectTextureStats = @{ 'palettes' = @{ 'cluts' = 5; 'shared' = 5 } }
 # PSX_CONVERT lines report meshes_read=0): an animated skinned mesh used to
 # be read back every frame. Their override.cfg turns on print_stats.
 $ExpectMeshesSettled = @('skinned', 'blend_shapes')
+# Scenes with GPUParticles3D: the last PSX_CONVERT line must report particles
+# drawn (particles= more than zero), so the image is not passing vacuously.
+$ExpectParticles = @('gpu_particles')
 
 function Get-GoldenDir([string]$SceneName) {
 	if ($GoldenAliases.ContainsKey($SceneName)) { $SceneName = $GoldenAliases[$SceneName] }
@@ -354,6 +357,13 @@ function Invoke-Check([string]$SceneName) {
 		$meshOk = $reads.Count -eq 2 -and ($reads | Where-Object { $_ -ne 0 }).Count -eq 0
 		Write-Result "PSX_CHECK scene=$SceneName image=meshes_settled result=$(if ($meshOk) {'pass'} else {'fail'}) meshes_read=$($reads -join ',')"
 		$results += $meshOk
+	}
+	if ($ExpectParticles -contains $SceneName) {
+		$conv = @($s.psx_lines | Where-Object { $_ -match '^PSX_CONVERT' } | Select-Object -Last 1)
+		$drawn = if ($conv.Count -and $conv[0] -match 'particles=(\d+)') { [int]$Matches[1] } else { -1 }
+		$partOk = $drawn -gt 0
+		Write-Result "PSX_CHECK scene=$SceneName image=particles_drawn result=$(if ($partOk) {'pass'} else {'fail'}) particles=$drawn"
+		$results += $partOk
 	}
 	if ($ExpectTextureStats.ContainsKey($SceneName)) {
 		$tex = @($s.psx_lines | Where-Object { $_ -match '^PSX_TEXTURES' } | Select-Object -Last 1)

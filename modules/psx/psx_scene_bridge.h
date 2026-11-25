@@ -41,6 +41,7 @@
 #include "servers/rendering/renderer_rd/storage_rd/light_storage.h"
 #include "servers/rendering/renderer_rd/storage_rd/material_storage.h"
 #include "servers/rendering/renderer_rd/storage_rd/mesh_storage.h"
+#include "servers/rendering/renderer_rd/storage_rd/particles_storage.h"
 #include "servers/rendering/renderer_rd/storage_rd/texture_storage.h"
 #include "servers/rendering/renderer_scene_render.h"
 #include "servers/rendering/rendering_server.h"
@@ -294,6 +295,8 @@ struct PSXSceneStats {
 	uint32_t surfaces = 0;
 	uint32_t conversions = 0;
 	uint32_t skinned = 0; // Surfaces skinned or blend-shaped on the CPU this frame
+	uint32_t particles = 0; // GPUParticles3D particles drawn (once per draw pass)
+	uint64_t particles_read_usec = 0; // Reading GPUParticles3D instance data back
 	uint32_t texture_uploads = 0; // Textures converted or re-uploaded this frame
 	uint32_t texture_fallbacks = 0; // Surfaces drawn untextured: no VRAM left
 	uint32_t textures_resident = 0;
@@ -422,8 +425,9 @@ public:
 				_draw_instance(f, mesh_storage, inst, inst->data->base, inst->transform);
 			} else if (inst->data->base_type == RSE::INSTANCE_MULTIMESH) {
 				_draw_multimesh(f, mesh_storage, inst);
+			} else if (inst->data->base_type == RSE::INSTANCE_PARTICLES) {
+				_draw_particles(f, mesh_storage, inst);
 			}
-			// Particles: not drawn yet.
 		}
 		_evict();
 		r_stats.textures_resident = 0;
@@ -528,6 +532,7 @@ private:
 	LocalVector<Light> lights;
 	LocalVector<Transform3D> bone_cache;
 	LocalVector<float> skin_positions, skin_normals;
+	Vector<uint8_t> particle_buffer; // GPUParticles3D instance data read back this frame
 	struct BlendWeight {
 		uint32_t shape = 0;
 		float weight = 0.0f;
@@ -901,6 +906,60 @@ private:
 				data.anim = d[custom + 2];
 			}
 			_draw_instance(f, p_storage, p_inst, mesh, p_inst->transform * local, data);
+		}
+	}
+
+	// GPUParticles3D: Godot simulates them on the GPU; their instance data
+	// (what Godot draws them with) is read back every frame and each live
+	// particle drawn with every draw pass's mesh, like a MultiMesh instance.
+	// The read-back waits for the GPU. Trails are not drawn.
+	void _draw_particles(Frame &f, RendererRD::MeshStorage *p_storage, const RenderGeometryInstanceBase *p_inst) {
+		RendererRD::ParticlesStorage *ps = RendererRD::ParticlesStorage::get_singleton();
+		const RID particles = p_inst->data->base;
+		if (!ps || !ps->owns_particles(particles) || ps->particles_is_inactive(particles)) {
+			return;
+		}
+		uint32_t amount = 0, trail_steps = 1;
+		{
+			PSXScopedTimer timer(f.stats->particles_read_usec);
+			particle_buffer = ps->particles_get_instance_data(particles, amount, trail_steps);
+		}
+		if (trail_steps > 1) {
+			WARN_PRINT_ONCE("PSX: GPUParticles3D trails are not drawn by the PS1 renderer.");
+			return;
+		}
+		constexpr int STRIDE = 20; // 12 transform floats (rows), colour, custom data
+		if (amount == 0 || particle_buffer.size() < (int)(amount * STRIDE * sizeof(float))) {
+			return;
+		}
+		// Particles in local coordinates are placed by the node; the others
+		// are already in world space.
+		const Transform3D base = ps->particles_is_using_local_coords(particles) ? p_inst->transform : Transform3D();
+		const float *r = reinterpret_cast<const float *>(particle_buffer.ptr());
+		const int passes = ps->particles_get_draw_passes(particles);
+		for (int pass = 0; pass < passes; pass++) {
+			const RID mesh = ps->particles_get_draw_pass_mesh(particles, pass);
+			if (!mesh.is_valid() || !p_storage->owns_mesh(mesh)) {
+				continue;
+			}
+			for (uint32_t k = 0; k < amount; k++) {
+				const float *d = r + k * STRIDE;
+				// Dead particles have a zero basis and an infinite origin.
+				if (!std::isfinite(d[3]) || !std::isfinite(d[7]) || !std::isfinite(d[11])) {
+					continue;
+				}
+				const Basis basis(d[0], d[1], d[2], d[4], d[5], d[6], d[8], d[9], d[10]);
+				if (basis.determinant() == 0.0f) {
+					continue;
+				}
+				PSXInstanceData data;
+				data.color = Color(d[12], d[13], d[14], d[15]);
+				data.has_color = true;
+				data.spin = d[16];
+				data.anim = d[18];
+				f.stats->particles++;
+				_draw_instance(f, p_storage, p_inst, mesh, base * Transform3D(basis, Vector3(d[3], d[7], d[11])), data);
+			}
 		}
 	}
 

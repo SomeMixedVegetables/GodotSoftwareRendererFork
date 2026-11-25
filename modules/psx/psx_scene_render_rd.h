@@ -254,7 +254,7 @@ public:
 		debug.report(frame_count, raster_usec, upload_usec, (int)p_instances.size(), (int)gpu->stats.triangles);
 		const psx::DrawStats &ds = scene_stats.draw;
 		debug.report_convert(frame_count, scene_stats.mesh_read_usec, scene_stats.meshes_read, scene_stats.mesh_convert_usec, scene_stats.meshes_converted, scene_stats.skin_usec, scene_stats.skinned,
-				scene_stats.texture_read_usec, scene_stats.textures_read, scene_stats.texture_convert_usec, scene_stats.textures_converted);
+				scene_stats.texture_read_usec, scene_stats.textures_read, scene_stats.texture_convert_usec, scene_stats.textures_converted, scene_stats.particles_read_usec, scene_stats.particles);
 		debug.report_scene(frame_count, scene_stats.instances, scene_stats.surfaces, scene_stats.conversions, ds.triangles_in, ds.culled_near, ds.culled_backface, ds.culled_offscreen, ds.culled_far);
 		debug.report_textures(frame_count, ds.textured, ds.windowed, scene_stats.textures_resident, scene_stats.textures_baked, scene_stats.texture_uploads, scene_stats.texture_fallbacks, scene_stats.texture_banks, scene_stats.vram_free_percent, scene_stats.clut_slots, scene_stats.shared_slots);
 		{
