@@ -1525,6 +1525,61 @@ static void test_palettes() {
 	CHECK(back.size() == 1 && back[0].data.shared_palette);
 }
 
+// A PSXTexture's preview (PS1 colours, source alpha from resample_alpha)
+// converts at any cut threshold to the same cut-out as the source image, so
+// a material whose threshold differs from the import one still cuts where
+// the source would. Shrinking (100 x 60 -> 32 x 32) and 1:1 sizes.
+static void test_preview_alpha_cut() {
+	for (int size : { 32, 128 }) {
+		const int w = size == 32 ? 100 : 32, h = size == 32 ? 60 : 32;
+		std::vector<uint8_t> src((size_t)w * h * 4);
+		for (int y = 0; y < h; y++) {
+			for (int x = 0; x < w; x++) {
+				// A disc whose alpha falls from 1 at the centre to 0 at the edge.
+				const float dx = (x + 0.5f) / w - 0.5f, dy = (y + 0.5f) / h - 0.5f;
+				const float d = std::sqrt(dx * dx + dy * dy) * 2.0f;
+				uint8_t *px = &src[((size_t)y * w + x) * 4];
+				px[0] = 200;
+				px[1] = (uint8_t)(x * 2);
+				px[2] = (uint8_t)(40 + y * 3);
+				px[3] = (uint8_t)std::lround(std::clamp(1.0f - d, 0.0f, 1.0f) * 255.0f);
+			}
+		}
+		TextureOptions opt;
+		opt.max_size = size;
+		TextureData opaque;
+		CHECK(convert_texture(src.data(), w, h, opt, opaque));
+		std::vector<uint8_t> preview;
+		decode_texture(opaque, false, preview);
+		std::vector<uint8_t> alpha;
+		resample_alpha(src.data(), w, h, opaque.width, opaque.height, alpha);
+		CHECK_EQ((int)alpha.size(), opaque.width * opaque.height);
+		for (size_t i = 0; i < alpha.size(); i++) {
+			preview[i * 4 + 3] = alpha[i];
+		}
+		for (float cut : { 0.05f, 0.2f, 0.25f, 0.4f, 0.5f, 0.6f, 0.75f, 0.9f, 1.0f }) {
+			TextureOptions c = opt;
+			c.alpha_mode = ALPHA_CUT;
+			c.alpha_cut = cut;
+			TextureData from_src, from_preview;
+			CHECK(convert_texture(src.data(), w, h, c, from_src));
+			CHECK(convert_texture(preview.data(), opaque.width, opaque.height, c, from_preview));
+			CHECK_EQ(from_src.width, from_preview.width);
+			CHECK_EQ(from_src.height, from_preview.height);
+			std::vector<uint8_t> a, b;
+			decode_texture(from_src, false, a);
+			decode_texture(from_preview, false, b);
+			int mismatches = 0, cut_texels = 0;
+			for (size_t i = 3; i < a.size(); i += 4) {
+				mismatches += (a[i] == 0) != (b[i] == 0) ? 1 : 0;
+				cut_texels += a[i] == 0 ? 1 : 0;
+			}
+			CHECK_EQ(mismatches, 0);
+			CHECK(cut_texels > 0); // The corners are always cut
+		}
+	}
+}
+
 static void test_texture_dither() {
 	// 15-bit: a flat grey halfway between two 5-bit levels (136 = 16.53
 	// steps) rounds to 17 everywhere without dither, and splits about
@@ -2751,6 +2806,7 @@ int main(int argc, char **argv) {
 		{ "convert_texture", test_convert_texture },
 		{ "baked_textures", test_baked_textures },
 		{ "palettes", test_palettes },
+		{ "preview_alpha_cut", test_preview_alpha_cut },
 		{ "texture_dither", test_texture_dither },
 		{ "vram_allocator", test_vram_allocator },
 		{ "textured_mesh", test_textured_mesh },

@@ -128,6 +128,12 @@ bool read_baked_textures(const uint8_t *p_bytes, size_t p_size, std::vector<Bake
 // ones when p_semi_alpha, else 255. For previews and tests.
 void decode_texture(const TextureData &p_texture, bool p_semi_alpha, std::vector<uint8_t> &r_rgba);
 
+// The source alpha of each texel of a p_tw x p_th texture converted from
+// p_rgba, averaged as convert_texture averages it. A preview whose texels
+// carry this alpha converts at any cut threshold to the same cut-out as the
+// source image.
+void resample_alpha(const uint8_t *p_rgba, int32_t p_width, int32_t p_height, int32_t p_tw, int32_t p_th, std::vector<uint8_t> &r_alpha);
+
 // CPU->VRAM copy (GP0 A0h) of a p_width x p_height rectangle of halfwords,
 // into texture bank p_bank (0 = VRAM).
 void upload_rect(GPU &p_gpu, int32_t p_x, int32_t p_y, int32_t p_width, int32_t p_height, const uint16_t *p_data, uint16_t p_bank = 0);

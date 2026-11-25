@@ -20,7 +20,8 @@ public:
 	virtual String get_resource_type() const override { return "PSXTexture"; }
 	// Below the standard texture importer, so it is never the default.
 	virtual float get_priority() const override { return 0.1f; }
-	virtual int get_format_version() const override { return 1; }
+	// 2: the preview keeps the source alpha (cut-outs at any threshold).
+	virtual int get_format_version() const override { return 2; }
 
 	virtual int get_preset_count() const override { return 0; }
 	virtual String get_preset_name(int p_idx) const override { return String(); }

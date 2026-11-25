@@ -24,7 +24,8 @@ void ResourceImporterPSXTexture::get_import_options(const String &p_path, List<I
 	// depth and max_colors. Reimport after changing the palette.
 	r_options->push_back(ImportOption(PropertyInfo(Variant::STRING, "psx/palette", PROPERTY_HINT_FILE, "*.tres,*.res"), ""));
 	// Materials with alpha scissor at this threshold use the baked cut-out;
-	// other thresholds convert when drawn.
+	// other thresholds convert the preview (which keeps the source alpha)
+	// when drawn.
 	r_options->push_back(ImportOption(PropertyInfo(Variant::FLOAT, "alpha/cut_threshold", PROPERTY_HINT_RANGE, "0,1,0.001"), 0.5));
 	// Godot (the editor, other renderers) shows the PS1 result instead of the source image.
 	r_options->push_back(ImportOption(PropertyInfo(Variant::BOOL, "preview/ps1_look"), true));

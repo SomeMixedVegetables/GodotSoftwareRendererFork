@@ -102,11 +102,21 @@ Ref<PSXTexture> PSXTexture::bake(const Ref<Image> &p_image, int p_max_size, int 
 
 	Ref<Image> shown = image;
 	if (p_preview) {
-		// The last variant carries the alpha a cut-out or blended material
-		// would see (0, half or full); without alpha it is the opaque one.
-		const psx::TextureData &t = baked.back().data;
+		// PS1 colours (of the opaque variant, which keeps the colour of every
+		// texel) with the source alpha, averaged to the baked size. A
+		// material whose alpha scissor threshold differs from the import
+		// one is converted from this image when drawn, and Godot's own
+		// renderer cuts it too: both then cut where the source would.
+		const psx::TextureData &t = baked.front().data;
 		std::vector<uint8_t> decoded;
-		psx::decode_texture(t, true, decoded);
+		psx::decode_texture(t, false, decoded);
+		if (has_alpha) {
+			std::vector<uint8_t> alpha;
+			psx::resample_alpha(rgba.ptr(), image->get_width(), image->get_height(), t.width, t.height, alpha);
+			for (size_t i = 0; i < alpha.size(); i++) {
+				decoded[i * 4 + 3] = alpha[i];
+			}
+		}
 		Vector<uint8_t> data;
 		data.resize((int64_t)decoded.size());
 		memcpy(data.ptrw(), decoded.data(), decoded.size());

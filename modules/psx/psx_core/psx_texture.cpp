@@ -730,6 +730,30 @@ void decode_texture(const TextureData &p_texture, bool p_semi_alpha, std::vector
 	}
 }
 
+void resample_alpha(const uint8_t *p_rgba, int32_t p_width, int32_t p_height, int32_t p_tw, int32_t p_th, std::vector<uint8_t> &r_alpha) {
+	r_alpha.assign((size_t)std::max(p_tw, 0) * std::max(p_th, 0), 255);
+	if (!p_rgba || p_width <= 0 || p_height <= 0 || p_tw <= 0 || p_th <= 0) {
+		return;
+	}
+	// The same spans and rounding as convert_texture's resample.
+	for (int32_t ty = 0; ty < p_th; ty++) {
+		const int32_t y0 = (int32_t)((int64_t)ty * p_height / p_th);
+		const int32_t y1 = std::max(y0 + 1, (int32_t)((int64_t)(ty + 1) * p_height / p_th));
+		for (int32_t tx = 0; tx < p_tw; tx++) {
+			const int32_t x0 = (int32_t)((int64_t)tx * p_width / p_tw);
+			const int32_t x1 = std::max(x0 + 1, (int32_t)((int64_t)(tx + 1) * p_width / p_tw));
+			uint64_t alpha = 0, n = 0;
+			for (int32_t y = y0; y < y1; y++) {
+				for (int32_t x = x0; x < x1; x++) {
+					alpha += p_rgba[((size_t)y * p_width + x) * 4 + 3];
+					n++;
+				}
+			}
+			r_alpha[(size_t)ty * p_tw + tx] = (uint8_t)((alpha + n / 2) / n);
+		}
+	}
+}
+
 void upload_rect(GPU &p_gpu, int32_t p_x, int32_t p_y, int32_t p_width, int32_t p_height, const uint16_t *p_data, uint16_t p_bank) {
 	if (p_width <= 0 || p_height <= 0) {
 		return;

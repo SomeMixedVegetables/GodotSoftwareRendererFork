@@ -247,7 +247,7 @@ readback or conversion when the texture is first drawn.
 | `psx/depth` | Auto, 4-bit, 8-bit or 15-bit; Project Setting uses `rendering/psx/textures/depth` |
 | `psx/max_colors` | Palette limit (0 = the depth's); -1 uses `rendering/psx/textures/max_colors` |
 | `alpha/cut_threshold` | The alpha scissor threshold the cut-out version is made for |
-| `preview/ps1_look` | Godot (editor, other renderers) shows the PS1 result instead of the source image |
+| `preview/ps1_look` | Godot (editor, other renderers) shows the PS1 colours instead of the source image, with the source alpha (averaged to the baked size) |
 
 **Models (glTF, .blend, FBX ...).** Select the model, turn on **Psx > Bake
 Textures** in the Import dock and reimport: every material's albedo texture
@@ -269,7 +269,10 @@ no third-party content).
 Images with alpha are baked three times: opaque, cut-out and blended, so any
 material can use them. A material whose alpha scissor threshold differs from
 `alpha/cut_threshold` (by more than 1/512) converts the texture when drawn,
-as before, from the texture's image (the preview, when it is on). Scripts can
+as before, from the texture's image (the preview, when it is on). The preview
+keeps the source alpha, so that conversion cuts where the source would
+(`preview_alpha_cut` checks this at nine thresholds); a blended material in
+Godot's own renderer shows that smooth alpha rather than the PS1's 50%. Scripts can
 bake too: `PSXTexture.bake(image, max_size, depth, max_colors, alpha_cut,
 preview)`.
 
