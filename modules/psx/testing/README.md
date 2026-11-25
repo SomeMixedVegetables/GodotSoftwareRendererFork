@@ -107,6 +107,27 @@ lines, the ordering table, frame layout and the demo. It also saves demo
 frames as PNG to `bin\psx_test_out\unit\demo\`, rendered without Godot or a
 window.
 
+GTE conformance (level L2, design doc section 18) is checked three ways:
+
+- `unr_exact`: the UNR divide against a second implementation in
+  `unit/gte_reference.h` for every SZ at 676 values of H and every H at 737
+  values of SZ (overflow flag included), and that one's seed table against
+  the published entries.
+- `gte_reference_fuzz`: 20,000 random register sets through each of RTPS,
+  RTPT, NCLIP, AVSZ3, AVSZ4, NCS, NCCS, NCDS, NCT, NCCT, NCDT and DPCS (sf and
+  lm both ways) on the core GTE and on `gte_reference.h`, which was written
+  separately from psx-spx in emulator order. Every MAC, IR, SZ, SXY, OTZ and
+  colour register and every FLAG bit must match, and each FLAG bit must be
+  reached at least 20 times.
+- `gte_flag_limits`: each FLAG bit just inside and just past its limit,
+  with the expected values worked out by hand (including the IR3 quirk: with
+  sf = 0 its flag follows MAC3 SAR 12, not the saturation).
+
+The reference is an independent reading of the same documents, not real
+hardware or an emulator: it catches slips, not a misreading both share. The
+hardware-captured vectors of ps1-tests are the next step (design doc
+section 18, scene-level tests).
+
 After a `unit` run, `bin\psx_test_out\unit\test_psx_core.exe --bench` times
 texture conversion on noisy synthetic images (the slowest kind: thousands of
 colours to cut to a palette), one `PSX_BENCH` line per size with the time and

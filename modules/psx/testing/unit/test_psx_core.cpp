@@ -17,6 +17,8 @@
 #include "../../psx_core/psx_texture.h"
 #include "../../psx_core/psx_trig.h"
 
+#include "gte_reference.h"
+
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -140,6 +142,405 @@ static void test_unr_divide() {
 	}
 	std::printf("  info: max |UNR - ideal| = %d\n", max_diff);
 	CHECK(max_diff <= 2);
+}
+
+// --- GTE against the reference GTE (gte_reference.h): L2 conformance ---
+
+// The reference's UNR table matches the published one, and the core's divide
+// matches the reference for every SZ at a spread of H (and for every H at a
+// spread of SZ), overflow flag included.
+static void test_unr_exact() {
+	for (int i = 0; i < 16; i++) {
+		CHECK_EQ(gte_ref::unr_entry(i), gte_ref::UNR_FIRST[i]);
+	}
+	for (int i = 0; i < 4; i++) {
+		CHECK_EQ(gte_ref::unr_entry(253 + i), gte_ref::UNR_LAST[i]);
+	}
+	int mismatches = 0;
+	auto compare = [&](uint32_t p_h, uint32_t p_sz) {
+		bool overflow = false;
+		uint32_t flag = 0;
+		const uint32_t a = GTE::unr_divide((uint16_t)p_h, (uint16_t)p_sz, overflow);
+		const uint32_t b = gte_ref::divide(p_h, p_sz, flag);
+		if (a != b || overflow != ((flag & FLAG_DIVIDE) != 0)) {
+			if (mismatches++ < 5) {
+				std::printf("  UNR h=%u sz=%u core=%u ref=%u\n", p_h, p_sz, a, b);
+			}
+		}
+	};
+	for (uint32_t h = 0; h <= 0xFFFF; h += 97) {
+		for (uint32_t sz = 0; sz <= 0xFFFF; sz++) {
+			compare(h, sz);
+		}
+	}
+	for (uint32_t sz = 0; sz <= 0xFFFF; sz += 89) {
+		for (uint32_t h = 0; h <= 0xFFFF; h++) {
+			compare(h, sz);
+		}
+	}
+	CHECK_EQ(mismatches, 0);
+}
+
+// Deterministic random numbers for the fuzz tests.
+struct Fuzz {
+	uint64_t state;
+	explicit Fuzz(uint64_t p_seed) :
+			state(p_seed) {}
+	uint32_t next() {
+		state = state * 6364136223846793005ull + 1442695040888963407ull;
+		return (uint32_t)(state >> 32);
+	}
+	// Mostly ordinary values, sometimes anything, sometimes a limit: the
+	// mix that reaches every saturation and overflow.
+	int32_t pick(int32_t p_typical, int32_t p_lo, int32_t p_hi) {
+		const uint32_t kind = next() % 8;
+		if (kind == 0) {
+			return (next() & 1) ? p_lo : p_hi;
+		}
+		if (kind <= 2) {
+			const uint64_t span = (uint64_t)((int64_t)p_hi - p_lo + 1);
+			return (int32_t)((int64_t)p_lo + (int64_t)(next() % span));
+		}
+		return (int32_t)(next() % (uint32_t)(2 * p_typical + 1)) - p_typical;
+	}
+	int16_t s16(int32_t p_typical) { return (int16_t)pick(p_typical, -0x8000, 0x7FFF); }
+};
+
+static void fill_random(Fuzz &f, GTE &g, gte_ref::Regs &r) {
+	for (int i = 0; i < 3; i++) {
+		for (int j = 0; j < 3; j++) {
+			r.rt[i][j] = g.rotation.m[i][j] = f.s16(4096);
+			r.llm[i][j] = g.light_dirs.m[i][j] = f.s16(4096);
+			r.lcm[i][j] = g.light_colors.m[i][j] = f.s16(4096);
+		}
+		r.v[i][0] = g.v[i].x = f.s16(2000);
+		r.v[i][1] = g.v[i].y = f.s16(2000);
+		r.v[i][2] = g.v[i].z = f.s16(4000);
+	}
+	const int32_t tr[3] = { f.pick(4000, INT32_MIN, INT32_MAX), f.pick(4000, INT32_MIN, INT32_MAX), f.pick(8000, INT32_MIN, INT32_MAX) };
+	g.translation = { tr[0], tr[1], tr[2] };
+	const int32_t bk[3] = { f.pick(4096, INT32_MIN, INT32_MAX), f.pick(4096, INT32_MIN, INT32_MAX), f.pick(4096, INT32_MIN, INT32_MAX) };
+	g.ambient = { bk[0], bk[1], bk[2] };
+	const int32_t fc[3] = { f.pick(4096, INT32_MIN, INT32_MAX), f.pick(4096, INT32_MIN, INT32_MAX), f.pick(4096, INT32_MIN, INT32_MAX) };
+	g.far_color = { fc[0], fc[1], fc[2] };
+	for (int i = 0; i < 3; i++) {
+		r.tr[i] = tr[i];
+		r.bk[i] = bk[i];
+		r.fc[i] = fc[i];
+	}
+	r.ofx = g.ofx = f.pick(200 << 16, INT32_MIN, INT32_MAX);
+	r.ofy = g.ofy = f.pick(200 << 16, INT32_MIN, INT32_MAX);
+	r.h = g.h = (uint16_t)f.pick(300, 0, 0xFFFF);
+	if ((int32_t)r.h < 0) {
+		r.h = g.h = (uint16_t)-(int32_t)r.h;
+	}
+	r.dqa = g.dqa = f.s16(200);
+	r.dqb = g.dqb = f.pick(1 << 24, INT32_MIN, INT32_MAX);
+	r.zsf3 = g.zsf3 = f.s16(1365);
+	r.zsf4 = g.zsf4 = f.s16(1024);
+	g.rgbc = { (uint8_t)f.next(), (uint8_t)f.next(), (uint8_t)f.next(), (uint8_t)f.next() };
+	r.rgbc[0] = g.rgbc.r;
+	r.rgbc[1] = g.rgbc.g;
+	r.rgbc[2] = g.rgbc.b;
+	r.rgbc[3] = g.rgbc.code;
+	r.ir[0] = g.ir[0] = (int16_t)f.pick(2048, -0x8000, 0x7FFF);
+	for (int i = 0; i < 4; i++) {
+		r.sz[i] = g.sz[i] = (uint16_t)f.next();
+	}
+	for (int i = 0; i < 3; i++) {
+		r.sx[i] = g.sx[i] = f.s16(1023);
+		r.sy[i] = g.sy[i] = f.s16(1023);
+	}
+}
+
+// Every register both GTEs write; prints the first differences.
+static bool same_state(const GTE &g, const gte_ref::Regs &r, const char *p_op, int p_case, int &r_reported) {
+	bool same = g.flag == r.flag && g.otz == r.otz;
+	for (int i = 0; i < 4; i++) {
+		same = same && g.mac[i] == r.mac[i] && g.ir[i] == r.ir[i] && g.sz[i] == r.sz[i];
+	}
+	for (int i = 0; i < 3; i++) {
+		same = same && g.sx[i] == r.sx[i] && g.sy[i] == r.sy[i];
+		same = same && g.rgb[i].r == r.rgb[i][0] && g.rgb[i].g == r.rgb[i][1] && g.rgb[i].b == r.rgb[i][2] && g.rgb[i].code == r.rgb[i][3];
+	}
+	if (!same && r_reported++ < 8) {
+		std::printf("  GTE %s case %d: flag %08X/%08X mac %d,%d,%d,%d / %d,%d,%d,%d ir %d,%d,%d,%d / %d,%d,%d,%d sxy %d,%d / %d,%d sz3 %u/%u otz %u/%u rgb %u,%u,%u / %u,%u,%u\n",
+				p_op, p_case, g.flag, r.flag, g.mac[0], g.mac[1], g.mac[2], g.mac[3], r.mac[0], r.mac[1], r.mac[2], r.mac[3],
+				g.ir[0], g.ir[1], g.ir[2], g.ir[3], r.ir[0], r.ir[1], r.ir[2], r.ir[3], g.sx[2], g.sy[2], r.sx[2], r.sy[2],
+				g.sz[3], r.sz[3], g.otz, r.otz, g.rgb[2].r, g.rgb[2].g, g.rgb[2].b, r.rgb[2][0], r.rgb[2][1], r.rgb[2][2]);
+	}
+	return same;
+}
+
+// Randomised registers through every command (sf and lm both ways) on the
+// core GTE and the reference: every result register and FLAG bit must match.
+// Also counts how often each FLAG bit was set, so the fuzzing provably
+// reaches every saturation and overflow.
+static void test_gte_reference_fuzz() {
+	const char *names[] = { "RTPS", "RTPT", "NCLIP", "AVSZ3", "AVSZ4", "NCS", "NCCS", "NCDS", "NCT", "NCCT", "NCDT", "DPCS" };
+	const int ops = 12;
+	int mismatches[12] = {};
+	int reported = 0;
+	uint32_t bit_seen[32] = {};
+	Fuzz f(0x5EEDF00Dull);
+	const int cases = 20000;
+	for (int c = 0; c < cases; c++) {
+		for (int op = 0; op < ops; op++) {
+			GTE g;
+			gte_ref::Machine m;
+			fill_random(f, g, m.r);
+			for (int i = 0; i < 4; i++) {
+				m.r.mac[i] = g.mac[i];
+			}
+			for (int i = 1; i < 4; i++) {
+				m.r.ir[i] = g.ir[i];
+			}
+			const bool sf = (f.next() % 4) != 0;
+			const bool lm = (f.next() % 2) != 0;
+			switch (op) {
+				case 0:
+					g.rtps(sf, lm);
+					m.rtps(sf, lm);
+					break;
+				case 1:
+					g.rtpt(sf, lm);
+					m.rtpt(sf, lm);
+					break;
+				case 2:
+					g.nclip();
+					m.nclip();
+					break;
+				case 3:
+					g.avsz3();
+					m.avsz3();
+					break;
+				case 4:
+					g.avsz4();
+					m.avsz4();
+					break;
+				case 5:
+					g.ncs(sf, lm);
+					m.nc(0, false, sf, lm);
+					break;
+				case 6:
+					g.nccs(sf, lm);
+					m.nc(1, false, sf, lm);
+					break;
+				case 7:
+					g.ncds(sf, lm);
+					m.nc(2, false, sf, lm);
+					break;
+				case 8:
+					g.nct(sf, lm);
+					m.nc(0, true, sf, lm);
+					break;
+				case 9:
+					g.ncct(sf, lm);
+					m.nc(1, true, sf, lm);
+					break;
+				case 10:
+					g.ncdt(sf, lm);
+					m.nc(2, true, sf, lm);
+					break;
+				default:
+					g.dpcs(sf, lm);
+					m.dpcs(sf, lm);
+					break;
+			}
+			if (!same_state(g, m.r, names[op], c, reported)) {
+				mismatches[op]++;
+			}
+			for (int b = 12; b < 32; b++) {
+				bit_seen[b] += (m.r.flag >> b) & 1;
+			}
+		}
+	}
+	for (int op = 0; op < ops; op++) {
+		if (mismatches[op]) {
+			std::printf("  info: %s differs from the reference in %d of %d cases\n", names[op], mismatches[op], cases);
+		}
+		CHECK_EQ(mismatches[op], 0);
+	}
+	// Every FLAG bit the commands can set was reached at least 20 times.
+	for (int b = 12; b < 32; b++) {
+		if (bit_seen[b] < 20) {
+			std::printf("  info: FLAG bit %d set only %u times\n", b, bit_seen[b]);
+		}
+		CHECK(bit_seen[b] >= 20);
+	}
+}
+
+// Each FLAG bit at its limit: one value just inside (bit clear) and one just
+// past it (bit set), worked out by hand from the psx-spx formulas. With RT =
+// 0 and V = 0, RTPS makes MACi = TRi exactly, so the translation sets every
+// intermediate; H = 256 and SZ3 = 512 give a divide result of 8000h (0.5).
+static void test_gte_flag_limits() {
+	auto rtps_tr = [](int32_t p_x, int32_t p_y, int32_t p_z, bool p_sf = true, bool p_lm = false) {
+		GTE g;
+		g.h = 256;
+		g.translation = { p_x, p_y, p_z };
+		g.rtps(p_sf, p_lm);
+		return g;
+	};
+	auto has = [](const GTE &p_g, uint32_t p_bit) { return (p_g.flag & p_bit) != 0; };
+
+	// IR1: -8000h..7FFFh (lm = 0), 0..7FFFh (lm = 1).
+	CHECK(!has(rtps_tr(0x7FFF, 0, 512), FLAG_IR1_SAT));
+	CHECK(has(rtps_tr(0x8000, 0, 512), FLAG_IR1_SAT));
+	CHECK_EQ(rtps_tr(0x8000, 0, 512).ir[1], 0x7FFF);
+	CHECK_EQ(rtps_tr(0x8000, 0, 512).mac[1], 0x8000); // MAC keeps the value
+	CHECK(!has(rtps_tr(-0x8000, 0, 512), FLAG_IR1_SAT));
+	CHECK(has(rtps_tr(-0x8001, 0, 512), FLAG_IR1_SAT));
+	CHECK(!has(rtps_tr(0, 0, 512, true, true), FLAG_IR1_SAT));
+	CHECK(has(rtps_tr(-1, 0, 512, true, true), FLAG_IR1_SAT));
+	CHECK_EQ(rtps_tr(-1, 0, 512, true, true).ir[1], 0);
+	// IR2 likewise.
+	CHECK(!has(rtps_tr(0, 0x7FFF, 512), FLAG_IR2_SAT));
+	CHECK(has(rtps_tr(0, 0x8000, 512), FLAG_IR2_SAT));
+
+	// IR3 quirk: with sf = 0, IR3 saturates from MAC3 but its flag follows
+	// MAC3 SAR 12. TRZ = 2 gives MAC3 = 2000h (sf = 0): IR3 = 2000h, no flag.
+	{
+		GTE g;
+		g.h = 256;
+		g.translation = { 0, 0, 16 }; // MAC3 = 16 * 4096 = 10000h with sf = 0
+		g.rtps(false, false);
+		CHECK_EQ(g.mac[3], 0x10000);
+		CHECK_EQ(g.ir[3], 0x7FFF); // Saturated...
+		CHECK(!has(g, FLAG_IR3_SAT)); // ...but 10000h SAR 12 = 16 is in range: no flag
+		g.translation = { 0, 0, 0x8000 }; // SAR 12 = 8000h: past 7FFFh
+		g.rtps(false, false);
+		CHECK(has(g, FLAG_IR3_SAT));
+	}
+
+	// MAC1 44-bit overflow: TRX * 1000h alone reaches 7FFFFFFF000h (inside);
+	// adding RT11 * VX = 1000h tips it past 7FFFFFFFFFFh.
+	{
+		GTE g;
+		g.h = 256;
+		g.translation = { 0x7FFFFFFF, 0, 512 };
+		g.rtps();
+		CHECK(!has(g, FLAG_MAC1_POS));
+		g.rotation.m[0][0] = 1;
+		g.v[0] = { 0x1000, 0, 0 };
+		g.rtps();
+		CHECK(has(g, FLAG_MAC1_POS));
+		CHECK(has(g, FLAG_ERROR));
+		// Negative: -80000000h * 1000h is exactly -80000000000h (inside);
+		// one less is past it.
+		g.translation = { INT32_MIN, 0, 512 };
+		g.v[0] = { 0, 0, 0 };
+		g.rtps();
+		CHECK(!has(g, FLAG_MAC1_NEG));
+		g.v[0] = { -1, 0, 0 };
+		g.rtps();
+		CHECK(has(g, FLAG_MAC1_NEG));
+	}
+
+	// SZ3: 0..FFFFh.
+	CHECK(!has(rtps_tr(0, 0, 0xFFFF), FLAG_SZ_SAT));
+	CHECK(has(rtps_tr(0, 0, 0x10000), FLAG_SZ_SAT));
+	CHECK_EQ(rtps_tr(0, 0, 0x10000).sz[3], 0xFFFF);
+	CHECK(has(rtps_tr(0, 0, -1), FLAG_SZ_SAT));
+
+	// Divide overflow: H < SZ3 * 2 divides; SZ3 = 128 (H / 2) overflows.
+	CHECK(!has(rtps_tr(0, 0, 129), FLAG_DIVIDE));
+	CHECK(has(rtps_tr(0, 0, 128), FLAG_DIVIDE));
+
+	// SX: n = 8000h, so SX = IR1 / 2 (OFX = 0): 7FEh -> 3FFh inside, 800h ->
+	// 400h past; -800h -> -400h inside, -802h -> -401h past.
+	CHECK_EQ(rtps_tr(0x7FE, 0, 512).sx[2], 0x3FF);
+	CHECK(!has(rtps_tr(0x7FE, 0, 512), FLAG_SX_SAT));
+	CHECK(has(rtps_tr(0x800, 0, 512), FLAG_SX_SAT));
+	CHECK_EQ(rtps_tr(0x800, 0, 512).sx[2], 0x3FF);
+	CHECK(!has(rtps_tr(-0x800, 0, 512), FLAG_SX_SAT));
+	CHECK(has(rtps_tr(-0x802, 0, 512), FLAG_SX_SAT));
+	CHECK_EQ(rtps_tr(-0x802, 0, 512).sx[2], -0x400);
+	CHECK(has(rtps_tr(0, -0x802, 512), FLAG_SY_SAT));
+	CHECK(!has(rtps_tr(0, -0x800, 512), FLAG_SY_SAT));
+
+	// MAC0: n * IR1 + OFX past 7FFFFFFFh. OFX = 7FFF0000h, n * IR1 = 8000h *
+	// 2 = 10000h -> 80000000h: past.
+	{
+		GTE g;
+		g.h = 256;
+		g.ofx = 0x7FFF0000;
+		g.translation = { 1, 0, 512 };
+		g.rtps();
+		CHECK(!has(g, FLAG_MAC0_POS)); // 7FFF0000h + 8000h
+		g.translation = { 2, 0, 512 };
+		g.rtps();
+		CHECK(has(g, FLAG_MAC0_POS));
+		g.ofx = INT32_MIN;
+		g.translation = { -1, 0, 512 };
+		g.rtps();
+		CHECK(has(g, FLAG_MAC0_NEG));
+	}
+
+	// IR0: (n * DQA + DQB) SAR 12 in 0..1000h. DQA = 0, DQB = 1000000h gives
+	// exactly 1000h (inside); one more 1000h step is past.
+	{
+		GTE g;
+		g.h = 256;
+		g.translation = { 0, 0, 512 };
+		g.dqb = 0x1000000;
+		g.rtps();
+		CHECK_EQ(g.ir[0], 0x1000);
+		CHECK(!has(g, FLAG_IR0_SAT));
+		g.dqb = 0x1001000;
+		g.rtps();
+		CHECK(has(g, FLAG_IR0_SAT));
+		CHECK(!has(g, FLAG_ERROR)); // IR0 is not part of the error summary
+		g.dqb = -1;
+		g.rtps();
+		CHECK(has(g, FLAG_IR0_SAT));
+		CHECK_EQ(g.ir[0], 0);
+	}
+
+	// Colour FIFO: MAC / 16 in 0..FFh. NCS with no lights and BK sets the
+	// colour MAC directly: BK = FF0h -> FFh (inside), 1000h -> 100h (past).
+	{
+		GTE g;
+		g.ambient = { 0xFF0, 0, 0 };
+		g.ncs();
+		CHECK_EQ(g.rgb[2].r, 0xFF);
+		CHECK(!has(g, FLAG_COLOR_R_SAT));
+		g.ambient = { 0x1000, 0, 0 };
+		g.ncs();
+		CHECK(has(g, FLAG_COLOR_R_SAT));
+		CHECK(!has(g, FLAG_ERROR)); // Colour bits are not part of it either
+		g.ambient = { 0, 0, -16 };
+		g.ncs();
+		CHECK(has(g, FLAG_COLOR_B_SAT));
+		CHECK_EQ(g.rgb[2].b, 0);
+	}
+
+	// OTZ: AVSZ3 = ZSF3 * (SZ1 + SZ2 + SZ3) SAR 12 in 0..FFFFh.
+	{
+		GTE g;
+		g.zsf3 = 4096;
+		g.sz[1] = 0xFFFF;
+		g.sz[2] = 0;
+		g.sz[3] = 0;
+		g.avsz3();
+		CHECK_EQ(g.otz, 0xFFFF);
+		CHECK(!has(g, FLAG_SZ_SAT));
+		g.sz[2] = 1;
+		g.avsz3();
+		CHECK(has(g, FLAG_SZ_SAT));
+		g.zsf3 = -1;
+		g.avsz3();
+		CHECK_EQ(g.otz, 0);
+		CHECK(has(g, FLAG_SZ_SAT));
+	}
+
+	// FLAG is cleared by every command.
+	{
+		GTE g = rtps_tr(0x8000, 0, 512);
+		CHECK(g.flag != 0);
+		g.nclip();
+		CHECK_EQ(g.flag, 0);
+	}
 }
 
 static GTE basic_gte() {
@@ -2172,7 +2573,10 @@ int main(int argc, char **argv) {
 	const Test tests[] = {
 		{ "trig", test_trig },
 		{ "unr_divide", test_unr_divide },
+		{ "unr_exact", test_unr_exact },
 		{ "rtps_rtpt", test_rtps },
+		{ "gte_reference_fuzz", test_gte_reference_fuzz },
+		{ "gte_flag_limits", test_gte_flag_limits },
 		{ "nclip_avsz", test_nclip_avsz },
 		{ "gte_lighting", test_gte_lighting },
 		{ "convert_mesh", test_convert_mesh },

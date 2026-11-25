@@ -261,25 +261,27 @@ void GTE::_push_color(const int64_t p_mac[3]) {
 // interpolate toward FC by IR0, then push the colour and set MAC/IR.
 // p_mac holds, on entry, the un-shifted products for the colour stages.
 void GTE::_color_tail(int64_t p_mac[3], NCMode p_mode, bool p_sf, bool p_lm) {
+	// MAC1-3 are 32-bit registers: each step's IR and the colour come from
+	// the shifted sum truncated to 32 bits, as in the lighting steps.
 	const int shift = p_sf ? 12 : 0;
 	if (p_mode == NC_DEPTH) {
 		const int64_t fc[3] = { far_color.x, far_color.y, far_color.z };
 		int16_t t[3];
 		for (int i = 0; i < 3; i++) {
-			const int64_t d = _check_mac(i + 1, (fc[i] << 12) - p_mac[i]) >> shift;
-			t[i] = _saturate_ir(i + 1, d, false);
+			mac[i + 1] = (int32_t)(_check_mac(i + 1, (fc[i] << 12) - p_mac[i]) >> shift);
+			t[i] = _saturate_ir(i + 1, mac[i + 1], false);
 		}
 		for (int i = 0; i < 3; i++) {
 			p_mac[i] = _check_mac(i + 1, (int64_t)t[i] * ir[0] + p_mac[i]);
 		}
 	}
 	for (int i = 0; i < 3; i++) {
-		p_mac[i] >>= shift;
-		mac[i + 1] = (int32_t)p_mac[i];
+		mac[i + 1] = (int32_t)(p_mac[i] >> shift);
+		p_mac[i] = mac[i + 1];
 	}
 	_push_color(p_mac);
 	for (int i = 0; i < 3; i++) {
-		ir[i + 1] = _saturate_ir(i + 1, p_mac[i], p_lm);
+		ir[i + 1] = _saturate_ir(i + 1, mac[i + 1], p_lm);
 	}
 }
 
