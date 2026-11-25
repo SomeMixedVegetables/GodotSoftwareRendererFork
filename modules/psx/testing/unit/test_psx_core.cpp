@@ -2328,6 +2328,168 @@ static void test_textured_polygon_sets_draw_mode() {
 	CHECK_EQ(g.vram_get(5, 5), rgb15(10, 10, 10));
 }
 
+// --- GPU: L3 edge cases (design doc section 18) ---
+
+// A quad is drawn as (v0, v1, v2) then (v1, v2, v3): the crease runs from v1
+// to v2 whatever the shape. With only v3 bright, v0's half stays exactly
+// the dark colour; turning the same square's vertex order turns the crease.
+static void test_quad_split() {
+	auto draw = [](GPU &g, const int p_xy[4][2]) {
+		const GP0Encoder &e = g.get_encoder();
+		const uint32_t dark = col(8, 8, 8), bright = col(255, 255, 255);
+		send(g, { 0x38000000u | dark, e.vertex(p_xy[0][0], p_xy[0][1]), dark, e.vertex(p_xy[1][0], p_xy[1][1]), dark, e.vertex(p_xy[2][0], p_xy[2][1]), bright, e.vertex(p_xy[3][0], p_xy[3][1]) });
+	};
+	const uint16_t dark15 = rgb15(1, 1, 1);
+	// v1 = top right, v2 = bottom left: crease along x + y = 32.
+	{
+		GPU g;
+		const int xy[4][2] = { { 0, 0 }, { 32, 0 }, { 0, 32 }, { 32, 32 } };
+		draw(g, xy);
+		bool dark_ok = true, bright_ok = true;
+		for (int y = 0; y < 32; y++) {
+			for (int x = 0; x < 32; x++) {
+				const uint16_t p = g.vram_get(x, y);
+				if (x + y <= 30) {
+					dark_ok = dark_ok && p == dark15;
+				} else if (x + y >= 34) {
+					bright_ok = bright_ok && (p & 31) > 1;
+				}
+			}
+		}
+		CHECK(dark_ok);
+		CHECK(bright_ok);
+	}
+	// The same square, v1 = top left and v2 = bottom right: the crease is
+	// the other diagonal (y = x), bright below it.
+	{
+		GPU g;
+		const int xy[4][2] = { { 32, 0 }, { 0, 0 }, { 32, 32 }, { 0, 32 } };
+		draw(g, xy);
+		bool dark_ok = true, bright_ok = true;
+		for (int y = 0; y < 32; y++) {
+			for (int x = 0; x < 32; x++) {
+				const uint16_t p = g.vram_get(x, y);
+				if (x >= y + 2) {
+					dark_ok = dark_ok && p == dark15;
+				} else if (y >= x + 2) {
+					bright_ok = bright_ok && (p & 31) > 1;
+				}
+			}
+		}
+		CHECK(dark_ok);
+		CHECK(bright_ok);
+	}
+}
+
+// Texture window, every mask in X and in Y with several offsets: Texcoord =
+// (Texcoord AND NOT (Mask * 8)) OR ((Offset AND Mask) * 8) (psx-spx).
+static void test_texture_window_all() {
+	GPU g;
+	const GP0Encoder &e = g.get_encoder();
+	// A 256 x 1 row and a 1 x 256 column of distinct texels (value = index + 1).
+	std::vector<uint16_t> row(256), column(256);
+	for (int i = 0; i < 256; i++) {
+		row[i] = (uint16_t)(i + 1);
+		column[i] = (uint16_t)(0x1000 + i);
+	}
+	upload(g, 512, 0, 256, 1, row);
+	upload(g, 768, 0, 1, 256, column);
+	const uint8_t offsets[] = { 0, 5, 21, 31 };
+	int bad_x = 0, bad_y = 0;
+	for (int mask = 0; mask < 32; mask++) {
+		for (uint8_t off : offsets) {
+			const uint32_t keep = (uint32_t)~(mask * 8) & 0xFF, set = (uint32_t)(off & mask) * 8;
+			// X: a 256-wide raw sprite of row 0.
+			g.write_gp0(0xE1000000u | GP0Encoder::texpage(512, 0, TEXTURE_15BIT, BLEND_HALF));
+			send(g, { e.texture_window((uint8_t)mask, 0, off, 0) });
+			send(g, { 0x65000000u, e.vertex(0, 300), e.texcoord(0, 0), e.xy(256, 1) });
+			for (int u = 0; u < 256; u++) {
+				bad_x += g.vram_get(u, 300) != row[(u & keep) | set];
+			}
+			// Y: a 256-tall raw sprite of the column.
+			g.write_gp0(0xE1000000u | GP0Encoder::texpage(768, 0, TEXTURE_15BIT, BLEND_HALF));
+			send(g, { e.texture_window(0, (uint8_t)mask, 0, off) });
+			send(g, { 0x65000000u, e.vertex(300, 256), e.texcoord(0, 0), e.xy(1, 256) });
+			for (int v = 0; v < 256; v++) {
+				bad_y += g.vram_get(300, 256 + v) != column[(v & keep) | set];
+			}
+		}
+	}
+	CHECK_EQ(bad_x, 0);
+	CHECK_EQ(bad_y, 0);
+}
+
+static void test_degenerate_and_coordinates() {
+	// Collinear (zero area, but not zero height): nothing drawn.
+	{
+		GPU g;
+		flat_tri(g, 0, 0, 10, 10, 20, 20, col(255, 255, 255));
+		CHECK_EQ(count_nonzero(g, 0, 0, 64, 64), 0);
+		CHECK_EQ(g.stats.rejected_triangles, 1);
+	}
+	// One pixel tall: only the top row (the bottom edge is excluded).
+	{
+		GPU g;
+		flat_tri(g, 0, 10, 20, 10, 0, 11, col(255, 255, 255));
+		CHECK(count_nonzero(g, 0, 10, 64, 11) > 0);
+		CHECK_EQ(count_nonzero(g, 0, 11, 64, 12), 0);
+		CHECK_EQ(count_nonzero(g, 0, 0, 64, 10), 0);
+	}
+	// Negative coordinates are clipped at the drawing area, never wrapped
+	// to the far side of VRAM: x + y < 20 of the positive quadrant.
+	{
+		GPU g;
+		flat_tri(g, -20, -20, 40, -20, -20, 40, col(255, 255, 255));
+		CHECK(g.vram_get(0, 0) != 0);
+		CHECK(g.vram_get(18, 0) != 0);
+		CHECK(g.vram_get(0, 18) != 0);
+		CHECK_EQ(g.vram_get(20, 1), 0);
+		CHECK_EQ(count_nonzero(g, 1000, 0, 1024, 512), 0);
+		CHECK_EQ(count_nonzero(g, 0, 490, 1024, 512), 0);
+	}
+	// The drawing offset is added before the 11-bit sign extension, so the
+	// sum wraps: offset -1024 plus vertex -1024 is -2048, which wraps to 0.
+	{
+		GPU g;
+		const GP0Encoder &e = g.get_encoder();
+		send(g, { e.draw_offset(-1024, 0) });
+		auto raw = [](int32_t x, int32_t y) { return ((uint32_t)(y & 0x7FF) << 16) | (uint32_t)(x & 0x7FF); };
+		send(g, { 0x20000000u | col(255, 255, 255), raw(-1024, 0), raw(-1014, 0), raw(-1024, 10) });
+		CHECK(g.vram_get(0, 0) != 0);
+		CHECK(g.vram_get(5, 2) != 0);
+	}
+	// A drawing area whose right edge is left of its left edge draws nothing.
+	{
+		GPU g;
+		const GP0Encoder &e = g.get_encoder();
+		send(g, { e.draw_area_top_left(20, 0), e.draw_area_bottom_right(10, 100) });
+		flat_tri(g, 0, 0, 100, 0, 0, 100, col(255, 255, 255));
+		send(g, { 0x60000000u | col(255, 255, 255), e.vertex(0, 0), e.xy(64, 64) });
+		CHECK_EQ(count_nonzero(g, 0, 0, 128, 128), 0);
+	}
+	// Texture pages wrap at the VRAM edge: a 15-bit page at X = 960 read at
+	// U = 64 and beyond comes from X = 0 onwards.
+	{
+		GPU g;
+		const GP0Encoder &e = g.get_encoder();
+		std::vector<uint16_t> edge(64), start(16);
+		for (int i = 0; i < 64; i++) {
+			edge[i] = (uint16_t)(0x100 + i);
+		}
+		for (int i = 0; i < 16; i++) {
+			start[i] = (uint16_t)(0x200 + i);
+		}
+		upload(g, 960, 0, 64, 1, edge);
+		upload(g, 0, 0, 16, 1, start);
+		g.write_gp0(0xE1000000u | GP0Encoder::texpage(960, 0, TEXTURE_15BIT, BLEND_HALF));
+		send(g, { 0x65000000u, e.vertex(0, 300), e.texcoord(60, 0), e.xy(12, 1) });
+		CHECK_EQ(g.vram_get(0, 300), edge[60]);
+		CHECK_EQ(g.vram_get(3, 300), edge[63]);
+		CHECK_EQ(g.vram_get(4, 300), start[0]);
+		CHECK_EQ(g.vram_get(11, 300), start[7]);
+	}
+}
+
 // --- ordering table ---
 
 static void test_ordering_table() {
@@ -2605,6 +2767,9 @@ int main(int argc, char **argv) {
 		{ "texture_window_and_flip", test_texture_window_and_flip },
 		{ "textured_triangle_affine", test_textured_triangle_affine },
 		{ "mask_bit", test_mask_bit },
+		{ "quad_split", test_quad_split },
+		{ "texture_window_all", test_texture_window_all },
+		{ "degenerate_and_coordinates", test_degenerate_and_coordinates },
 		{ "fill_and_copies", test_fill_and_copies },
 		{ "lines", test_lines },
 		{ "polygon_sets_draw_mode", test_textured_polygon_sets_draw_mode },

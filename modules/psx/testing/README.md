@@ -123,6 +123,15 @@ GTE conformance (level L2, design doc section 18) is checked three ways:
   with the expected values worked out by hand (including the IR3 quirk: with
   sf = 0 its flag follows MAC3 SAR 12, not the saturation).
 
+GPU edge cases (level L3) are checked by `quad_split` (a Gouraud quad's
+crease runs from v1 to v2 and follows vertex order, not shape),
+`texture_window_all` (all 32 masks in X and in Y with four offsets, against
+the psx-spx formula) and `degenerate_and_coordinates` (collinear and
+one-pixel-tall triangles, negative coordinates clipped rather than wrapped,
+the drawing offset added before the 11-bit wrap, an empty drawing area, and
+texture pages wrapping at the VRAM edge), alongside the earlier fill-rule,
+size-limit, mask-bit and transparency tests.
+
 The reference is an independent reading of the same documents, not real
 hardware or an emulator: it catches slips, not a misreading both share. The
 hardware-captured vectors of ps1-tests are the next step (design doc
