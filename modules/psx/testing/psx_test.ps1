@@ -112,7 +112,7 @@ $ExpectTextureStats = @{ 'palettes' = @{ 'cluts' = 5; 'shared' = 5 } }
 # Scenes whose meshes must not be read back again once drawn (the last two
 # PSX_CONVERT lines report meshes_read=0): an animated skinned mesh used to
 # be read back every frame. Their override.cfg turns on print_stats.
-$ExpectMeshesSettled = @('skinned')
+$ExpectMeshesSettled = @('skinned', 'blend_shapes')
 
 function Get-GoldenDir([string]$SceneName) {
 	if ($GoldenAliases.ContainsKey($SceneName)) { $SceneName = $GoldenAliases[$SceneName] }

@@ -293,7 +293,7 @@ struct PSXSceneStats {
 	uint32_t instances = 0;
 	uint32_t surfaces = 0;
 	uint32_t conversions = 0;
-	uint32_t skinned = 0;
+	uint32_t skinned = 0; // Surfaces skinned or blend-shaped on the CPU this frame
 	uint32_t texture_uploads = 0; // Textures converted or re-uploaded this frame
 	uint32_t texture_fallbacks = 0; // Surfaces drawn untextured: no VRAM left
 	uint32_t textures_resident = 0;
@@ -473,11 +473,17 @@ private:
 		LocalVector<int32_t> bones;
 		LocalVector<float> weights;
 		int influences = 0;
+		// Blend shapes: `shape_count` sets of positions (and of normals, when
+		// the surface has normals), vertex_count * 3 floats each, as stored
+		// (normalized or relative: see the mesh's blend shape mode).
+		uint32_t shape_count = 0;
+		LocalVector<float> shape_positions, shape_normals;
 		Vector2 uv_min, uv_max; // UV bounds (when there are UVs)
 	};
 
 	struct MeshEntry {
 		AABB aabb; // The mesh's current bounds (posed, for skinned meshes)
+		RID mesh;
 		uint32_t signature = 0; // _mesh_signature when the surfaces were read
 		LocalVector<SourceSurface> surfaces;
 		HashMap<uint64_t, psx::MeshData> converted;
@@ -522,6 +528,11 @@ private:
 	LocalVector<Light> lights;
 	LocalVector<Transform3D> bone_cache;
 	LocalVector<float> skin_positions, skin_normals;
+	struct BlendWeight {
+		uint32_t shape = 0;
+		float weight = 0.0f;
+	};
+	LocalVector<BlendWeight> blend_cache; // This instance's blend shape weights that are not zero
 	psx::MeshData skin_mesh;
 	Color fog_color;
 	float fog_sky_affect = 0.0f;
@@ -715,6 +726,22 @@ private:
 			}
 			skinned = bone_count > 0;
 		}
+		// Blend shapes: the weights set on this instance's mesh (not on the
+		// draw passes of particles, which have their own meshes). Only the
+		// weights that are not zero, as Godot's skinning shader does.
+		blend_cache.clear();
+		bool blend_normalized = false;
+		if (r_entry.mesh == p_inst->data->base && p_inst->mesh_instance.is_valid()) {
+			const LocalVector<float> *weights = p_storage->mesh_instance_get_blend_weights(p_inst->mesh_instance);
+			if (weights) {
+				for (uint32_t k = 0; k < weights->size(); k++) {
+					if (Math::abs((*weights)[k]) > 0.0001f) {
+						blend_cache.push_back(BlendWeight{ k, (*weights)[k] });
+					}
+				}
+				blend_normalized = p_storage->mesh_get_blend_shape_mode(r_entry.mesh) == RSE::BLEND_SHAPE_MODE_NORMALIZED;
+			}
+		}
 
 		for (uint32_t surface = 0; surface < entry->surfaces.size(); surface++) {
 			const SourceSurface &src = entry->surfaces[surface];
@@ -748,8 +775,10 @@ private:
 			const psx::TextureData *tex_data = tex ? &tex->data : nullptr;
 
 			const psx::MeshData *data = nullptr;
-			if (skinned && src.influences > 0) {
-				data = _skin(src, mat, tex_data, normal_scale, sb, f);
+			const bool skin_surface = skinned && src.influences > 0;
+			const bool shape_surface = !blend_cache.is_empty() && src.shape_count > 0;
+			if (skin_surface || shape_surface) {
+				data = _skin(src, shape_surface, blend_normalized, skin_surface, mat, tex_data, normal_scale, sb, f);
 			} else {
 				data = _get_converted(*entry, surface, bucket, sb, mat, tex_data, normal_scale, *f.stats);
 			}
@@ -875,9 +904,11 @@ private:
 		}
 	}
 
-	// Linear-blend skinning on the CPU, then a fresh conversion (not cached:
-	// the pose changes every frame). Returns nullptr if nothing to draw.
-	const psx::MeshData *_skin(const SourceSurface &p_src, const PSXMaterialInfo &p_mat, const psx::TextureData *p_texture, const Vector3 &p_normal_scale, double p_scale, Frame &f) {
+	// Blend shapes (blend_cache's weights, applied as Godot's skinning shader
+	// does) then linear-blend skinning on the CPU, then a fresh conversion
+	// (not cached: the pose changes every frame). Returns nullptr if nothing
+	// to draw.
+	const psx::MeshData *_skin(const SourceSurface &p_src, bool p_shapes, bool p_normalized, bool p_skin, const PSXMaterialInfo &p_mat, const psx::TextureData *p_texture, const Vector3 &p_normal_scale, double p_scale, Frame &f) {
 		PSXScopedTimer timer(f.stats->skin_usec);
 		const uint32_t n = p_src.vertex_count;
 		const int inf = p_src.influences;
@@ -885,12 +916,40 @@ private:
 		skin_positions.resize(n * 3);
 		skin_normals.resize(has_normals ? n * 3 : 0);
 		const int bone_count = (int)bone_cache.size();
+		const int influences = p_skin ? inf : 0;
+		float shape_total = 0.0f;
+		if (p_shapes) {
+			for (const BlendWeight &bw : blend_cache) {
+				if (bw.shape < p_src.shape_count) {
+					shape_total += bw.weight;
+				}
+			}
+		}
 		for (uint32_t v = 0; v < n; v++) {
-			const Vector3 p(p_src.positions[v * 3], p_src.positions[v * 3 + 1], p_src.positions[v * 3 + 2]);
-			const Vector3 nrm = has_normals ? Vector3(p_src.normals[v * 3], p_src.normals[v * 3 + 1], p_src.normals[v * 3 + 2]) : Vector3();
+			Vector3 p(p_src.positions[v * 3], p_src.positions[v * 3 + 1], p_src.positions[v * 3 + 2]);
+			Vector3 nrm = has_normals ? Vector3(p_src.normals[v * 3], p_src.normals[v * 3 + 1], p_src.normals[v * 3 + 2]) : Vector3();
+			if (p_shapes) {
+				Vector3 bp, bn;
+				for (const BlendWeight &bw : blend_cache) {
+					if (bw.shape >= p_src.shape_count) {
+						continue;
+					}
+					const uint32_t o = (bw.shape * n + v) * 3;
+					bp += Vector3(p_src.shape_positions[o], p_src.shape_positions[o + 1], p_src.shape_positions[o + 2]) * bw.weight;
+					if (has_normals) {
+						bn += Vector3(p_src.shape_normals[o], p_src.shape_normals[o + 1], p_src.shape_normals[o + 2]) * bw.weight;
+					}
+				}
+				if (p_normalized) {
+					p *= 1.0f - shape_total;
+					nrm *= 1.0f - shape_total;
+				}
+				p += bp;
+				nrm = (nrm + bn).normalized();
+			}
 			Vector3 sp, sn;
 			float total = 0.0f;
-			for (int j = 0; j < inf; j++) {
+			for (int j = 0; j < influences; j++) {
 				const float w = p_src.weights[v * inf + j];
 				const int bone = p_src.bones[v * inf + j];
 				if (w <= 0.0f || bone < 0 || bone >= bone_count) {
@@ -1003,6 +1062,7 @@ private:
 			entry = &meshes.insert(p_mesh, MeshEntry())->value;
 		}
 		entry->aabb = aabb;
+		entry->mesh = p_mesh;
 		entry->signature = signature;
 		entry->last_used = frame;
 		entry->converted.clear();
@@ -1077,8 +1137,66 @@ private:
 					dst.weights[k] = weights[k];
 				}
 			}
+			_read_blend_shapes(sd, dst);
 		}
 		return entry;
+	}
+
+	// Decodes a surface's blend shapes (stored uncompressed, positions and
+	// normals only, one block per shape) into the source surface.
+	static void _read_blend_shapes(const RenderingServerTypes::SurfaceData &p_sd, SourceSurface &r_dst) {
+		const uint32_t n = r_dst.vertex_count;
+		if (p_sd.blend_shape_data.is_empty() || n == 0 || p_sd.vertex_count != n) {
+			return;
+		}
+		RenderingServer *rs = RenderingServer::get_singleton();
+		const uint64_t bs_format = p_sd.format & RSE::ARRAY_FORMAT_BLEND_SHAPE_MASK;
+		uint32_t offsets[RSE::ARRAY_MAX];
+		uint32_t vertex_size = 0, normal_size = 0, attrib_size = 0, skin_size = 0;
+		rs->mesh_surface_make_offsets_from_format(bs_format, n, 0, offsets, vertex_size, normal_size, attrib_size, skin_size);
+		const int block = (int)((vertex_size + normal_size) * n);
+		if (block <= 0 || p_sd.blend_shape_data.size() % block != 0) {
+			return;
+		}
+		const uint32_t count = p_sd.blend_shape_data.size() / block;
+		const bool has_normals = !r_dst.normals.is_empty();
+		r_dst.shape_positions.resize(count * n * 3);
+		r_dst.shape_normals.resize(has_normals ? count * n * 3 : 0);
+		for (uint32_t i = 0; i < count; i++) {
+			// Read like a surface of its own: the same decoding as the base.
+			RenderingServerTypes::SurfaceData shape;
+			shape.primitive = p_sd.primitive;
+			shape.format = bs_format;
+			shape.vertex_data = p_sd.blend_shape_data.slice(i * block, (i + 1) * block);
+			shape.vertex_count = n;
+			shape.aabb = p_sd.aabb;
+			shape.uv_scale = p_sd.uv_scale;
+			const Array arrays = rs->mesh_create_arrays_from_surface_data(shape);
+			if (arrays.size() != RSE::ARRAY_MAX) {
+				r_dst.shape_positions.clear();
+				r_dst.shape_normals.clear();
+				return;
+			}
+			const PackedVector3Array vertices = arrays[RSE::ARRAY_VERTEX];
+			const PackedVector3Array normals = arrays[RSE::ARRAY_NORMAL];
+			float *pos = r_dst.shape_positions.ptr() + i * n * 3;
+			for (uint32_t v = 0; v < n; v++) {
+				const Vector3 q = v < (uint32_t)vertices.size() ? vertices[v] : Vector3(r_dst.positions[v * 3], r_dst.positions[v * 3 + 1], r_dst.positions[v * 3 + 2]);
+				pos[v * 3 + 0] = (float)q.x;
+				pos[v * 3 + 1] = (float)q.y;
+				pos[v * 3 + 2] = (float)q.z;
+			}
+			if (has_normals) {
+				float *nrm = r_dst.shape_normals.ptr() + i * n * 3;
+				for (uint32_t v = 0; v < n; v++) {
+					const Vector3 q = v < (uint32_t)normals.size() ? normals[v] : Vector3(r_dst.normals[v * 3], r_dst.normals[v * 3 + 1], r_dst.normals[v * 3 + 2]);
+					nrm[v * 3 + 0] = (float)q.x;
+					nrm[v * 3 + 1] = (float)q.y;
+					nrm[v * 3 + 2] = (float)q.z;
+				}
+			}
+		}
+		r_dst.shape_count = count;
 	}
 
 	const psx::MeshData *_get_converted(MeshEntry &p_entry, uint32_t p_surface, int32_t p_bucket, double p_scale, const PSXMaterialInfo &p_mat, const psx::TextureData *p_texture, const Vector3 &p_normal_scale, PSXSceneStats &r_stats) {

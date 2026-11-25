@@ -42,6 +42,7 @@ window frames, `-Stats`, `-Dev`, `-ModelsDir <folder>`, `-ModelsPerCategory 2`.
 | `texture_dither` | Ordered texture dither: a gradient with an 8-colour palette, a dark gradient at 15-bit and a gradient with a fixed 4-colour PSXPalette, baked without (top) and with (middle) dither; runtime textures dithered by `rendering/psx/textures/dither` (bottom, set in its `.override.cfg`) |
 | `particles_anim` | Particle animation frames (a 4 x 2 sheet, frames picked by custom data Z, clamped and looped) and per-instance MultiMesh colours on a material that uses vertex colour |
 | `skinned` | A two-bone mesh built in code, bent every frame (CPU skinning). Also fails if the mesh is read back from Godot again after its first frame (`meshes_settled`) |
+| `blend_shapes` | Meshes with two blend shapes built in code, weights changed every frame (CPU blend shapes): normalized (left), relative (middle), and on a skinned mesh (right). Also fails if a mesh is read back again after its first frame (`meshes_settled`) |
 | `sprites` | Sprite3D, AnimatedSprite3D and Label3D, with and without billboarding, and a billboard material |
 | `shaders` | ShaderMaterial: colour and texture uniforms, unshaded, alpha, vertex displacement, computed colour |
 | `split` | Two SubViewports on one world (split screen) and a third with its own world |
@@ -82,7 +83,7 @@ Some scenes add checks: `baked_in_use` (the baked texture count),
 `script` (a line the scene's script prints), `psx_off` (no PSX frames
 when the scene turns the PS1 view off), `textures_settled` (no texture
 uploads in each viewport's last frame) and `meshes_settled` (no mesh read
-back from Godot in the last two frames: `skinned`).
+back from Godot in the last two frames: `skinned`, `blend_shapes`).
 
 ## Unit tests
 
@@ -262,8 +263,9 @@ preview)`.
 - There is no depth buffer: polygons are sorted by average depth in the
   ordering table, as on the PS1, so overlapping or crossing polygons can sort
   wrongly. This is intended.
-- Skinned meshes are skinned and converted again every frame on the CPU,
-  which gets slow with many characters.
+- Skinned meshes, and meshes with blend shape weights that are not zero, are
+  deformed and converted again every frame on the CPU, which gets slow with
+  many characters.
 - Textures have no mipmaps or filtering (nearest texel, affine mapping, as
   on the PS1), so fine detail shimmers at a distance.
 - Textures larger than `textures/max_size` (256 at most) are scaled down.

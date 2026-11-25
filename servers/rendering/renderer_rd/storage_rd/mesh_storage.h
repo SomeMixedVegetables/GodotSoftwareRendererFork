@@ -652,6 +652,13 @@ public:
 	virtual void mesh_instance_free(RID p_rid) override;
 	virtual void mesh_instance_set_skeleton(RID p_mesh_instance, RID p_skeleton) override;
 	virtual void mesh_instance_set_blend_shape_weight(RID p_mesh_instance, int p_shape, float p_weight) override;
+	// The blend shape weights set on a mesh instance (one per blend shape), or
+	// null when it has none; for renderers that apply blend shapes themselves
+	// (PSX module).
+	const LocalVector<float> *mesh_instance_get_blend_weights(RID p_mesh_instance) const {
+		const MeshInstance *mi = mesh_instance_owner.get_or_null(p_mesh_instance);
+		return (mi && !mi->blend_weights.is_empty()) ? &mi->blend_weights : nullptr;
+	}
 	virtual void mesh_instance_check_for_update(RID p_mesh_instance) override;
 	virtual void mesh_instance_set_canvas_item_transform(RID p_mesh_instance, const Transform2D &p_transform) override;
 	virtual void update_mesh_instances() override;
