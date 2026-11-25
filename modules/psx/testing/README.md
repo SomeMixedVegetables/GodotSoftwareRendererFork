@@ -44,6 +44,7 @@ window frames, `-Stats`, `-Dev`, `-ModelsDir <folder>`, `-ModelsPerCategory 2`.
 | `particles_anim` | Particle animation frames (a 4 x 2 sheet, frames picked by custom data Z, clamped and looped) and per-instance MultiMesh colours on a material that uses vertex colour |
 | `skinned` | A two-bone mesh built in code, bent every frame (CPU skinning). Also fails if the mesh is read back from Godot again after its first frame (`meshes_settled`) |
 | `blend_shapes` | Meshes with two blend shapes built in code, weights changed every frame (CPU blend shapes): normalized (left), relative (middle), and on a skinned mesh (right). Also fails if a mesh is read back again after its first frame (`meshes_settled`) |
+| `spot_cones` | Three SpotLight3D nodes with the same cone and spot_attenuation 0.25, 1 and 4, each over a sphere, to compare how their edges fade |
 | `sprites` | Sprite3D, AnimatedSprite3D and Label3D, with and without billboarding, and a billboard material |
 | `shaders` | ShaderMaterial: colour and texture uniforms, unshaded, alpha, vertex displacement, computed colour |
 | `split` | Two SubViewports on one world (split screen) and a third with its own world |
@@ -248,7 +249,8 @@ preview)`.
 - No shadows, specular highlights or environment reflections (metallic
   surfaces only lose their direct diffuse light).
 - Omni and spot lights are computed per vertex on the CPU, up to 4 per
-  object; directional lights use the GTE's three slots. Spot cones are hard.
+  object; directional lights use the GTE's three slots. Spot cones fade
+  toward their edge as Godot's do (spot_attenuation), per vertex.
 - Transparency is 50%, opaque or hidden per triangle (the PS1 has one alpha).
 - Fog follows the GTE depth cue, a curve in 1/Z fitted to Godot's at two depths.
 - Of the environment, only ambient light, the background colour and depth or

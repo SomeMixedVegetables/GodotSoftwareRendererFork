@@ -666,6 +666,37 @@ static void test_subdivide_and_point_lights() {
 	ot.draw(g);
 	CHECK((g.vram_get(160, 120) & 31) >= 20);
 	CHECK((g.vram_get(160 - 24, 120 - 24) & 31) == 0); // Corner: out of range.
+
+	// The same light as a wide spot aimed at the quad: Godot's edge fade
+	// (exponent 1) darkens a point off the axis compared with a hard edge,
+	// while the centre stays the same.
+	auto spot_level = [&](float p_exponent, int p_x, int p_y) {
+		GPU sg;
+		PacketArena sa(1u << 14);
+		PacketBuilder spb(sa, sg.get_encoder());
+		OrderingTable sot(sa, 256);
+		sot.clear();
+		sot.add(255, spb.fill(0, 0, 320, 240, 0, 0, 0));
+		sot.add(255, spb.environment(0, 0, 319, 239, 0, 0, GP0Encoder::texpage(0, 0, 0, 0, false)));
+		PointLight sl = pl;
+		sl.spot_axis[2] = 1.0f;
+		sl.spot_cos = std::cos(70.0f * 3.14159265f / 180.0f);
+		sl.spot_edge_exponent = p_exponent;
+		DrawParams sp;
+		sp.point_lights = &sl;
+		sp.point_light_count = 1;
+		DrawStats sst;
+		GTE sgte = gte;
+		draw_mesh(sgte, spb, sot, m, sp, sst);
+		sot.draw(sg);
+		return sg.vram_get(p_x, p_y) & 31;
+	};
+	const int soft_centre = spot_level(1.0f, 160, 120), hard_centre = spot_level(1e6f, 160, 120);
+	const int soft_off = spot_level(1.0f, 160 - 12, 120), hard_off = spot_level(1e6f, 160 - 12, 120);
+	CHECK(hard_centre >= 20);
+	CHECK(soft_centre >= hard_centre - 2);
+	CHECK(soft_off > 0);
+	CHECK(soft_off < hard_off);
 }
 
 // --- GPU: coverage ---

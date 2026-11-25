@@ -503,6 +503,7 @@ private:
 		float decay = 1.0f;
 		Vector3 spot_axis; // Spot: unit vector the light points along
 		float spot_cos = -2.0f; // Spot: cos of the cone half-angle (-2 = omni)
+		float spot_edge_exponent = 1.0f; // Spot: 1 / spot_attenuation
 	};
 
 	// Per-frame state shared by every object.
@@ -827,6 +828,7 @@ private:
 				pl.spot_axis[1] = (float)axis.y;
 				pl.spot_axis[2] = (float)axis.z;
 				pl.spot_cos = src_light.spot_cos;
+				pl.spot_edge_exponent = src_light.spot_edge_exponent;
 			}
 
 			psx::DrawParams params;
@@ -1813,6 +1815,11 @@ private:
 				case RSE::LIGHT_SPOT:
 					l.spot_axis = forward;
 					l.spot_cos = Math::cos(Math::deg_to_rad(ls->light_get_param(base, RSE::LIGHT_PARAM_SPOT_ANGLE)));
+					{
+						// As Godot's shader: 0 makes a hard edge.
+						const float spot_atten = ls->light_get_param(base, RSE::LIGHT_PARAM_SPOT_ATTENUATION);
+						l.spot_edge_exponent = Math::abs(spot_atten) > 1e-6f ? 1.0f / spot_atten : 1e6f;
+					}
 					[[fallthrough]];
 				case RSE::LIGHT_OMNI:
 					l.directional = false;

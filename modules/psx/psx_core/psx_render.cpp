@@ -78,7 +78,7 @@ static int project_ortho(GTE &p_gte, const DrawParams &p_params) {
 }
 
 // Light level (1.0 = 4096 per channel) a vertex gets from the point lights,
-// with Godot's omni falloff and a hard spot cone.
+// with Godot's omni falloff and spot cone fade.
 static void point_light_level(const DrawParams &p_params, const SVector &p_pos, const SVector &p_normal, int32_t r_level[3]) {
 	const float nx = p_normal.x / 4096.0f, ny = p_normal.y / 4096.0f, nz = p_normal.z / 4096.0f;
 	float acc[3] = { 0, 0, 0 };
@@ -99,12 +99,25 @@ static void point_light_level(const DrawParams &p_params, const SVector &p_pos, 
 		if (ndotl <= 0.0f) {
 			continue;
 		}
-		if (l.spot_cos > -1.5f && -(dx * l.spot_axis[0] + dy * l.spot_axis[1] + dz * l.spot_axis[2]) < l.spot_cos) {
-			continue;
+		float cone = 1.0f;
+		if (l.spot_cos > -1.5f) {
+			// Godot's spot fade: 1 - rim^exponent, where rim runs from 0 on
+			// the axis to 1 at the cone's edge (measured in 1 - cos).
+			const float scos = -(dx * l.spot_axis[0] + dy * l.spot_axis[1] + dz * l.spot_axis[2]);
+			if (scos <= l.spot_cos) {
+				continue;
+			}
+			const float span = 1.0f - l.spot_cos;
+			float rim = span > 0.0f ? (1.0f - scos) / span : 0.0f;
+			rim = rim > 0.0001f ? rim : 0.0001f;
+			cone = 1.0f - std::pow(rim, l.spot_edge_exponent);
+			if (cone <= 0.0f) {
+				continue;
+			}
 		}
 		const float ratio = dist / l.range;
 		const float window = 1.0f - ratio * ratio * ratio * ratio;
-		const float atten = window * window * std::pow(dist > 0.0001f ? dist : 0.0001f, -l.decay) * ndotl;
+		const float atten = window * window * std::pow(dist > 0.0001f ? dist : 0.0001f, -l.decay) * ndotl * cone;
 		for (int c = 0; c < 3; c++) {
 			acc[c] += l.color[c] * atten;
 		}

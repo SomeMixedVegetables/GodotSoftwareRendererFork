@@ -45,6 +45,9 @@ struct PointLight {
 	float color[3] = { 1, 1, 1 }; // Colour * energy (1.0 = full)
 	float spot_axis[3] = { 0, 0, -1 }; // Unit vector the light points along
 	float spot_cos = -2.0f; // Cos of the cone half-angle; -2 = omni
+	// Godot's 1 / spot_attenuation: how the light fades toward the cone's
+	// edge (1 = evenly, larger = harder edge, smaller = softer).
+	float spot_edge_exponent = 1.0f;
 };
 
 static constexpr int MAX_POINT_LIGHTS = 4;
