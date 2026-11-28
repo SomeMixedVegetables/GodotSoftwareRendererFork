@@ -1649,6 +1649,7 @@ void TextureStorage::_texture_2d_update(RID p_texture, const Ref<Image> &p_image
 	Ref<Image> validated = _validate_texture_format(p_image, f);
 
 	RD::get_singleton()->texture_update(tex->rd_texture, p_layer, validated->get_data());
+	tex->content_version = ++content_serial;
 }
 
 void TextureStorage::texture_2d_update(RID p_texture, const Ref<Image> &p_image, int p_layer) {
@@ -1910,6 +1911,22 @@ void TextureStorage::texture_3d_placeholder_initialize(RID p_texture) {
 }
 
 Ref<Image> TextureStorage::texture_2d_get(RID p_texture) const {
+	const RID source = texture_2d_get_read_source(p_texture);
+	return texture_2d_get_from_data(p_texture, source.is_valid() ? RD::get_singleton()->texture_get_data(source, 0) : Vector<uint8_t>());
+}
+
+RID TextureStorage::texture_2d_get_read_source(RID p_texture) const {
+	Texture *tex = texture_owner.get_or_null(p_texture);
+	ERR_FAIL_NULL_V(tex, RID());
+#ifdef TOOLS_ENABLED
+	if (tex->image_cache_2d.is_valid() && !tex->is_render_target) {
+		return RID();
+	}
+#endif
+	return tex->rd_texture;
+}
+
+Ref<Image> TextureStorage::texture_2d_get_from_data(RID p_texture, const Vector<uint8_t> &p_data) const {
 	Texture *tex = texture_owner.get_or_null(p_texture);
 	ERR_FAIL_NULL_V(tex, Ref<Image>());
 
@@ -1918,7 +1935,7 @@ Ref<Image> TextureStorage::texture_2d_get(RID p_texture) const {
 		return tex->image_cache_2d;
 	}
 #endif
-	Vector<uint8_t> data = RD::get_singleton()->texture_get_data(tex->rd_texture, 0);
+	const Vector<uint8_t> &data = p_data;
 	ERR_FAIL_COND_V(data.is_empty(), Ref<Image>());
 	Ref<Image> image;
 
@@ -2079,6 +2096,7 @@ void TextureStorage::texture_replace(RID p_texture, RID p_by_texture) {
 	*tex = *by_tex;
 
 	tex->streaming_state = streaming_state; // restore streaming state
+	tex->content_version = ++content_serial;
 
 	tex->proxies = proxies_to_update; //restore proxies, so they can be updated
 
@@ -2333,6 +2351,25 @@ void TextureStorage::texture_rd_initialize(RID p_texture, const RID &p_rd_textur
 	texture.is_proxy = false;
 
 	texture_owner.initialize_rid(p_texture, texture);
+}
+
+uint64_t TextureStorage::texture_get_content_version(RID p_texture) const {
+	const Texture *tex = texture_owner.get_or_null(p_texture);
+	if (tex && tex->proxy_to.is_valid()) {
+		tex = texture_owner.get_or_null(tex->proxy_to);
+	}
+	if (!tex) {
+		return 0;
+	}
+	return tex->is_render_target ? RSG::rasterizer->get_frame_number() : tex->content_version;
+}
+
+bool TextureStorage::texture_is_render_target(RID p_texture) const {
+	const Texture *tex = texture_owner.get_or_null(p_texture);
+	if (tex && tex->proxy_to.is_valid()) {
+		tex = texture_owner.get_or_null(tex->proxy_to);
+	}
+	return tex && tex->is_render_target;
 }
 
 RID TextureStorage::texture_get_rd_texture(RID p_texture, bool p_srgb) const {

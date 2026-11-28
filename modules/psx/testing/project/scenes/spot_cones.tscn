@@ -1,0 +1,75 @@
+[gd_scene load_steps=5 format=3]
+
+; Three spot lights aimed straight down with the same 35 degree cone and
+; different spot_attenuation, to compare how their edges fade: 0.25 (left,
+; nearly hard), 1 (middle, Godot's default) and 4 (right, soft). A sphere
+; under each shows the fade across a curved surface.
+
+[sub_resource type="Environment" id="env"]
+background_mode = 1
+background_color = Color(0.08, 0.08, 0.12, 1)
+ambient_light_source = 2
+ambient_light_color = Color(1, 1, 1, 1)
+ambient_light_energy = 0.1
+
+[sub_resource type="PlaneMesh" id="ground"]
+size = Vector2(12, 6)
+
+[sub_resource type="SphereMesh" id="sphere"]
+radius = 0.4
+height = 0.8
+radial_segments = 16
+rings = 8
+
+[sub_resource type="StandardMaterial3D" id="white"]
+albedo_color = Color(0.85, 0.85, 0.85, 1)
+
+[node name="SpotCones" type="Node3D"]
+
+[node name="WorldEnvironment" type="WorldEnvironment" parent="."]
+environment = SubResource("env")
+
+[node name="Camera3D" type="Camera3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 0.643, 0.766, 0, -0.766, 0.643, 0, 5, 4.2)
+
+[node name="Ground" type="MeshInstance3D" parent="."]
+mesh = SubResource("ground")
+surface_material_override/0 = SubResource("white")
+
+[node name="HardSpot" type="SpotLight3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 0, 1, 0, -1, 0, -3.5, 3, 0)
+light_color = Color(1, 0.75, 0.5, 1)
+light_energy = 4.0
+spot_range = 5.0
+spot_angle = 35.0
+spot_attenuation = 0.25
+
+[node name="DefaultSpot" type="SpotLight3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 0, 1, 0, -1, 0, 0, 3, 0)
+light_color = Color(0.6, 1, 0.6, 1)
+light_energy = 4.0
+spot_range = 5.0
+spot_angle = 35.0
+
+[node name="SoftSpot" type="SpotLight3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 0, 1, 0, -1, 0, 3.5, 3, 0)
+light_color = Color(0.6, 0.75, 1, 1)
+light_energy = 4.0
+spot_range = 5.0
+spot_angle = 35.0
+spot_attenuation = 4.0
+
+[node name="HardBall" type="MeshInstance3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -3.5, 0.4, 1)
+mesh = SubResource("sphere")
+surface_material_override/0 = SubResource("white")
+
+[node name="DefaultBall" type="MeshInstance3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.4, 1)
+mesh = SubResource("sphere")
+surface_material_override/0 = SubResource("white")
+
+[node name="SoftBall" type="MeshInstance3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 3.5, 0.4, 1)
+mesh = SubResource("sphere")
+surface_material_override/0 = SubResource("white")

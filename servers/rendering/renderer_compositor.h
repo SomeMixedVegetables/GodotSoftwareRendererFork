@@ -60,6 +60,12 @@ protected:
 	static bool low_end;
 
 public:
+	// Optional hook for modules that supply their own compositor. Set it at
+	// MODULE_INITIALIZATION_LEVEL_SERVERS. It runs after the display server has
+	// picked the backend and receives that backend's factory as p_default, so it
+	// can wrap, subclass or fall back to it.
+	static RendererCompositor *(*create_override)(RendererCompositor *(*p_default)());
+
 	static RendererCompositor *create();
 
 	virtual RendererCanvasRender *get_canvas() = 0;

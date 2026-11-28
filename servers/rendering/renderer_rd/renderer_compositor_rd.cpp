@@ -312,6 +312,7 @@ void RendererCompositorRD::set_boot_image_with_stretch(const Ref<Image> &p_image
 }
 
 RendererCompositorRD *RendererCompositorRD::singleton = nullptr;
+RendererSceneRenderRD *(*RendererCompositorRD::scene_create_override)(bool p_mobile) = nullptr;
 
 RendererCompositorRD::RendererCompositorRD() {
 	uniform_set_cache = memnew(UniformSetCacheRD);
@@ -378,16 +379,26 @@ RendererCompositorRD::RendererCompositorRD() {
 		if (rendering_method == "forward_plus") {
 			WARN_PRINT_ONCE("Platform supports less than 48 textures per stage which is less than required by the Clustered renderer. Attempting to fallback to the Mobile renderer.");
 		}
+		if (scene_create_override) {
+			scene = scene_create_override(true);
+		}
 #ifdef MOBILE_RD_ENABLED
-		scene = memnew(RendererSceneRenderImplementation::RenderForwardMobile());
+		if (!scene) {
+			scene = memnew(RendererSceneRenderImplementation::RenderForwardMobile());
+		}
 #endif // MOBILE_RD_ENABLED
 	} else {
 		if (rendering_method != "forward_plus") {
 			// Fall back to our high end renderer.
 			ERR_PRINT(vformat("Cannot instantiate RenderingDevice-based renderer with renderer type '%s'. Attempting to fallback to the to Forward+ renderer.", rendering_method));
 		}
+		if (scene_create_override) {
+			scene = scene_create_override(false);
+		}
 #ifdef FORWARD_RD_ENABLED
-		scene = memnew(RendererSceneRenderImplementation::RenderForwardClustered());
+		if (!scene) {
+			scene = memnew(RendererSceneRenderImplementation::RenderForwardClustered());
+		}
 #endif // FORWARD_RD_ENABLED
 	}
 

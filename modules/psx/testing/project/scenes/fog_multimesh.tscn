@@ -1,0 +1,41 @@
+[gd_scene load_steps=5 format=3]
+
+[ext_resource type="Script" path="res://scenes/fog_multimesh.gd" id="1"]
+
+[sub_resource type="Environment" id="env"]
+background_mode = 1
+background_color = Color(0.2, 0.25, 0.35, 1)
+ambient_light_source = 2
+ambient_light_color = Color(1, 1, 1, 1)
+ambient_light_energy = 0.3
+fog_enabled = true
+fog_mode = 1
+fog_light_color = Color(0.55, 0.6, 0.7, 1)
+fog_depth_begin = 4.0
+fog_depth_end = 28.0
+fog_sky_affect = 1.0
+
+[sub_resource type="PlaneMesh" id="ground"]
+size = Vector2(20, 40)
+
+[sub_resource type="StandardMaterial3D" id="ground_mat"]
+albedo_color = Color(0.35, 0.5, 0.3, 1)
+
+[node name="FogMultiMesh" type="Node3D"]
+
+[node name="WorldEnvironment" type="WorldEnvironment" parent="."]
+environment = SubResource("env")
+
+[node name="Camera3D" type="Camera3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 0.985, 0.174, 0, -0.174, 0.985, 0, 2.5, 6)
+
+[node name="Sun" type="DirectionalLight3D" parent="."]
+transform = Transform3D(0.866, -0.354, 0.354, 0, 0.707, 0.707, -0.5, -0.612, 0.612, 0, 5, 0)
+
+[node name="Ground" type="MeshInstance3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, -12)
+mesh = SubResource("ground")
+surface_material_override/0 = SubResource("ground_mat")
+
+[node name="Boxes" type="MultiMeshInstance3D" parent="."]
+script = ExtResource("1")

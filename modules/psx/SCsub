@@ -1,0 +1,12 @@
+#!/usr/bin/env python
+from misc.utility.scons_hints import *
+
+Import("env")
+Import("env_modules")
+
+env_psx = env_modules.Clone()
+
+env_psx.add_source_files(env.modules_sources, "*.cpp")
+# Godot-free PS1 core (GPU, GTE, ordering table); also built standalone by
+# testing/psx_test.ps1 unit.
+env_psx.add_source_files(env.modules_sources, "psx_core/*.cpp")

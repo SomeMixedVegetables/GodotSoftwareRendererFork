@@ -3301,6 +3301,66 @@
 			[b]Note:[/b] Enabling occlusion culling has a cost on the CPU. Only enable occlusion culling if you actually plan to use it. Large open scenes with few or no objects blocking the view will generally not benefit much from occlusion culling. Large open scenes generally benefit more from mesh LOD and visibility ranges ([member GeometryInstance3D.visibility_range_begin] and [member GeometryInstance3D.visibility_range_end]) compared to occlusion culling.
 			[b]Note:[/b] Due to memory constraints, occlusion culling is not supported by default in Web export templates. It can be enabled by compiling custom Web export templates with [code]module_raycast_enabled=yes[/code].
 		</member>
+		<member name="rendering/psx/active" type="bool" setter="" getter="" default="true">
+			If [code]true[/code], 3D is drawn by the PS1 renderer when it is installed ([member rendering/psx/enabled]); if [code]false[/code], Godot's own renderer draws it. Changes take effect on the next frame. Can be overridden per scene with [PSXSettings] and by scripts with [method PSX.set_active].
+		</member>
+		<member name="rendering/psx/debug/demo_scene" type="bool" setter="" getter="" default="false">
+			If [code]true[/code], the PS1 renderer draws its built-in test cube instead of the scene. Used to test the renderer.
+		</member>
+		<member name="rendering/psx/debug/demo_speed_percent" type="int" setter="" getter="" default="100">
+			How fast the built-in test cube ([member rendering/psx/debug/demo_scene]) turns, in percent.
+		</member>
+		<member name="rendering/psx/debug/dump_dir" type="String" setter="" getter="" default="&quot;&quot;">
+			If set to an absolute folder, the PS1 renderer saves each frame there as [code]psx_NNNN.png[/code], at its own resolution before scaling. Used by the PS1 renderer's test runner. See also [member rendering/psx/debug/dump_frames].
+		</member>
+		<member name="rendering/psx/debug/dump_frames" type="int" setter="" getter="" default="0">
+			How many frames, from the first, [member rendering/psx/debug/dump_dir] saves.
+		</member>
+		<member name="rendering/psx/debug/print_stats" type="bool" setter="" getter="" default="false">
+			If [code]true[/code], the PS1 renderer prints its statistics every frame ([code]PSX_STATS[/code], [code]PSX_SCENE[/code] (with [code]lines=[/code] and [code]points=[/code], the lines and points drawn), [code]PSX_TEXTURES[/code] and [code]PSX_CONVERT[/code] lines; [code]PSX_CONVERT[/code] gives the time spent reading meshes and images back from Godot, converting them, skinning and blend shapes, which [code]skinned=[/code] counts, and reading GPUParticles3D back, with [code]particles=[/code] the particles drawn). Scripts can read the same figures with [method PSX.get_stats].
+		</member>
+		<member name="rendering/psx/default_ambient" type="Color" setter="" getter="" default="Color(0.2, 0.2, 0.2, 1)">
+			The ambient light the PS1 renderer uses when the scene has no [WorldEnvironment]. Can be overridden per scene with [PSXSettings] and by scripts with [method PSX.set_setting].
+		</member>
+		<member name="rendering/psx/dither" type="bool" setter="" getter="" default="true">
+			If [code]true[/code], the PS1 renderer uses the GPU's 4×4 ordered dither on shaded and textured polygons, which hides banding in 15-bit colour. Changes take effect on the next frame. Can be overridden per scene with [PSXSettings], by scripts with [method PSX.set_setting], and per material with [member PSXMaterial3D.psx_dither].
+		</member>
+		<member name="rendering/psx/enabled" type="bool" setter="" getter="" default="false">
+			If [code]true[/code], the PS1 renderer is installed: a fixed-point software renderer that draws 3D the way the PlayStation's GTE and GPU did. It works with the Forward+ and Mobile rendering methods. A restart is needed (in the editor, the PSX dock has a Restart Editor button). Once installed, [member rendering/psx/active] switches it on and off without a restart.
+		</member>
+		<member name="rendering/psx/lighting_mode" type="int" setter="" getter="" default="0">
+			How the PS1 renderer applies light. [b]PS1[/b] multiplies the display colour by the light, as the GTE does, which makes midtones darker than in Godot. [b]Godot Match[/b] applies the light to linear colour, so lit surfaces are as bright as with Godot's renderer. Changes take effect on the next frame.
+		</member>
+		<member name="rendering/psx/resolution_height" type="int" setter="" getter="" default="240">
+			The height of the PS1 renderer's picture, in pixels. The picture is scaled to the window without filtering. A restart is needed.
+		</member>
+		<member name="rendering/psx/resolution_width" type="int" setter="" getter="" default="320">
+			The width of the PS1 renderer's picture, in pixels. The picture is scaled to the window without filtering. A restart is needed.
+		</member>
+		<member name="rendering/psx/subdivide_size" type="float" setter="" getter="" default="1.0">
+			The PS1 renderer splits polygons until no edge is longer than this, in metres, so large polygons sort, light and clip at the near plane like small ones. 0 turns subdivision off. Changing it converts the meshes drawn next again (a one-frame hitch). [member PSXMaterial3D.psx_subdivide] turns it off per material.
+		</member>
+		<member name="rendering/psx/textures/depth" type="int" setter="" getter="" default="0">
+			The colour depth the PS1 renderer converts textures to: [b]Auto[/b] (4-bit when 16 colours are enough, else 8-bit with a generated palette), [b]4-bit[/b], [b]8-bit[/b] or [b]15-bit[/b]. Changing it converts the textures drawn next again. [PSXTexture]s keep the depth they were imported with.
+		</member>
+		<member name="rendering/psx/textures/dither" type="bool" setter="" getter="" default="false">
+			Textures the PS1 renderer converts when drawn get an ordered (4x4 Bayer) dither where the texture loses colours, so smooth gradients blend instead of banding: on the choice of palette colour of 4-bit and 8-bit textures (by about the distance between neighbouring palette colours, at most eight 5-bit steps), and on the 8- to 5-bit step of 15-bit ones. The pattern is fixed to the texture's texels, so it moves with the surface; it is separate from the GPU's own screen dither ([member ProjectSettings.rendering/psx/dither]). A texture whose palette holds every one of its colours is not changed. Changing it converts the textures drawn next again. [PSXTexture]s keep the dither they were imported with (the importers' [code]psx/dither[/code]).
+		</member>
+		<member name="rendering/psx/textures/max_colors" type="int" setter="" getter="" default="0">
+			The most colours a 4-bit or 8-bit texture's palette may have. 0 means the depth's own limit (16 or 256). Changing it converts the textures drawn next again.
+		</member>
+		<member name="rendering/psx/textures/max_size" type="int" setter="" getter="" default="256">
+			The largest side, in texels, of a texture converted by the PS1 renderer. Bigger textures are scaled down. 256 is the PS1's texture page limit. Changing it converts the textures drawn next again.
+		</member>
+		<member name="rendering/psx/textures/vram_banks" type="int" setter="" getter="" default="0">
+			Texture memory, in 1024×512 banks. [b]1 (PS1)[/b] keeps textures in VRAM beside the picture, as on the hardware; when it is full, the textures used least recently are evicted and surfaces that still do not fit are drawn untextured. More banks hold more textures. [b]Unlimited[/b] adds banks as needed. A restart is needed.
+		</member>
+		<member name="rendering/psx/vram_scale" type="int" setter="" getter="" default="1">
+			Scales the PS1 renderer's VRAM to (1024 × N) × (512 × N) and its coordinate limits by N, so it can draw larger pictures than the hardware. 1 is the hardware. A restart is needed.
+		</member>
+		<member name="rendering/psx/world_scale" type="float" setter="" getter="" default="512.0">
+			GTE units per metre. Higher values give finer positions but a shorter view distance: the far limit is 65535 / [code]world_scale[/code] metres. Changing it converts the meshes drawn next again (a one-frame hitch).
+		</member>
 		<member name="rendering/reflections/reflection_atlas/reflection_count" type="int" setter="" getter="" default="64">
 			Number of cubemaps to store in the reflection atlas. The number of [ReflectionProbe]s in a scene will be limited by this amount. A higher number requires more VRAM.
 		</member>

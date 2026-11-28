@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<class name="PSXTexture" inherits="ImageTexture" api_type="core" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="../../../doc/class.xsd">
+	<brief_description>
+		A texture converted for the PS1 renderer ahead of time.
+	</brief_description>
+	<description>
+		The PS1 renderer draws textures from 4-bit or 8-bit palettes or 15-bit colour, at most 256×256. It converts an ordinary texture the first time it draws it. A PSXTexture carries that conversion already done, so nothing is converted while the game runs, and the result can be checked in the editor.
+		Make one by importing an image with [b]Import As: PSX Texture[/b] in the Import dock (see [ResourceImporterPSXTexture]), by turning on [code]psx/bake_textures[/code] in a 3D model's import settings, or from a script with [method bake]. Model imports bake each material's albedo texture; for a [ShaderMaterial] made during the import, the sampler the PS1 renderer draws with ([code]texture_albedo[/code], else the first [code]sampler2D[/code] marked [code]source_color[/code]).
+		It is an [ImageTexture], so Godot's renderers and the editor draw it like any other texture. Its image is either the source image or a preview of the PS1 result.
+	</description>
+	<tutorials>
+	</tutorials>
+	<methods>
+		<method name="bake" qualifiers="static">
+			<return type="PSXTexture" />
+			<param index="0" name="image" type="Image" />
+			<param index="1" name="max_size" type="int" default="0" />
+			<param index="2" name="depth" type="int" default="-1" />
+			<param index="3" name="max_colors" type="int" default="-1" />
+			<param index="4" name="alpha_cut" type="float" default="0.5" />
+			<param index="5" name="preview" type="bool" default="true" />
+			<param index="6" name="palette" type="PSXPalette" default="null" />
+			<param index="7" name="dither" type="int" default="-1" />
+			<description>
+				Converts [param image] for the PS1 renderer and returns the texture, or [code]null[/code] if the image is empty or cannot be decompressed.
+				[param max_size] is the largest side in texels (8 to 256; larger images are scaled down). [param depth] is 0 for Auto (4-bit when 16 colours are enough, else 8-bit), 1 for 4-bit, 2 for 8-bit or 3 for 15-bit. [param max_colors] limits the palette (0 means the depth's own limit). [param max_size] 0, [param depth] -1, [param max_colors] -1 and [param dither] -1 use the [code]rendering/psx/textures/*[/code] project settings.
+				[param dither] 1 adds an ordered (4x4 Bayer) dither where the texture loses colours, so smooth gradients blend instead of banding: on the choice of palette colour of 4-bit and 8-bit textures (by about the distance between neighbouring palette colours, at most eight 5-bit steps), and on the 8- to 5-bit step of 15-bit ones. The pattern is fixed to the texture's texels, so it moves with the surface; it is separate from the GPU's own screen dither ([member ProjectSettings.rendering/psx/dither]). A texture whose palette holds every one of its colours is not changed. 0 turns it off.
+				With [param palette], the texture is made with that [PSXPalette] instead of a palette of its own: [param depth] and [param max_colors] are not used, and it shares the palette's CLUT with other textures made with it. Materials can then swap in another palette of the same size ([member PSXMaterial3D.psx_palette]).
+				[param alpha_cut] is the alpha scissor threshold the cut-out version is made for; materials using another threshold fall back to converting the texture when drawn. With [param preview], the texture's image is the PS1 result instead of [param image].
+			</description>
+		</method>
+		<method name="get_baked_data" qualifiers="const">
+			<return type="PackedByteArray" />
+			<description>
+				Returns the converted texels and palettes, one set for each way a material can use alpha (opaque, cut-out, blended).
+			</description>
+		</method>
+		<method name="get_baked_summary" qualifiers="const">
+			<return type="String" />
+			<description>
+				Returns a short description of the converted data, such as [code]"64x64 4-bit, 16 colours, 3 alpha variants"[/code], or [code]"Not baked"[/code].
+			</description>
+		</method>
+		<method name="set_baked_data">
+			<return type="void" />
+			<param index="0" name="bytes" type="PackedByteArray" />
+			<description>
+				Sets the converted data, as returned by [method get_baked_data]. The PS1 renderer uses the new data from the next frame it draws this texture.
+			</description>
+		</method>
+	</methods>
+</class>

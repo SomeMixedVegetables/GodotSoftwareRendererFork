@@ -1,0 +1,59 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<class name="PSXMaterial3D" inherits="StandardMaterial3D" api_type="core" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="../../../doc/class.xsd">
+	<brief_description>
+		A [StandardMaterial3D] with options for the PS1 renderer.
+	</brief_description>
+	<description>
+		Works like [StandardMaterial3D] and adds a PSX group: dithering on or off for this material whatever the settings say, subdivision off, and the PS1's own blend modes. To turn an existing material into one, choose [b]Convert to PSXMaterial3D[/b] in its menu in the inspector; its other properties are kept.
+		Godot's own renderers ignore these options. With the PS1 renderer off, the material draws as a [StandardMaterial3D].
+	</description>
+	<tutorials>
+	</tutorials>
+	<members>
+		<member name="psx_blend" type="int" setter="set_psx_blend" getter="get_psx_blend" enum="PSXMaterial3D.PSXBlend" default="0">
+			The PS1 GPU's semi-transparency mode for this material, replacing what its [member BaseMaterial3D.transparency] and [member BaseMaterial3D.blend_mode] give. [constant PSX_BLEND_ADD_QUARTER] has no Godot equivalent. Texels whose alpha is below the alpha scissor threshold are still left out.
+		</member>
+		<member name="psx_dither" type="int" setter="set_psx_dither" getter="get_psx_dither" enum="PSXMaterial3D.Dither" default="0">
+			Whether the GPU's 4×4 ordered dither is used on this material's polygons. [constant DITHER_PROJECT] follows the [code]dither[/code] setting (project setting, [PSXSettings] node or [method PSX.set_setting]).
+			On the PS1, dither is drawing state rather than part of a polygon, so a material that differs from the setting adds a drawing-mode command before and after each of its triangles. That costs little, but it is not free on large meshes.
+		</member>
+		<member name="psx_palette" type="PSXPalette" setter="set_psx_palette" getter="get_psx_palette">
+			The [PSXPalette] this material's albedo texture is drawn with. If the texture was baked with a palette of the same [member PSXPalette.size], this one is swapped in: the texels stay and only the colours change, sharing the texture's place in texture memory. Otherwise the texture is converted to this palette when drawn. [code]null[/code] draws the texture with its own palette.
+		</member>
+		<member name="psx_subdivide" type="int" setter="set_psx_subdivide" getter="get_psx_subdivide" enum="PSXMaterial3D.Subdivide" default="0">
+			[constant SUBDIVIDE_OFF] draws this material's meshes with their own triangles, without the splitting set by [member ProjectSettings.rendering/psx/subdivide_size]. Use it for meshes modelled with small, even triangles, or to keep the stretched textures and lighting of big polygons as a look. Big polygons near the camera are still clipped at the near plane and split when too large for the GPU, but sort less well in the ordering table.
+		</member>
+	</members>
+	<constants>
+		<constant name="DITHER_PROJECT" value="0" enum="Dither">
+			Dither as the [code]dither[/code] setting says.
+		</constant>
+		<constant name="DITHER_ON" value="1" enum="Dither">
+			Always dither this material.
+		</constant>
+		<constant name="DITHER_OFF" value="2" enum="Dither">
+			Never dither this material.
+		</constant>
+		<constant name="SUBDIVIDE_PROJECT" value="0" enum="Subdivide">
+			Subdivide as the [code]subdivide_size[/code] setting says.
+		</constant>
+		<constant name="SUBDIVIDE_OFF" value="1" enum="Subdivide">
+			Never subdivide this material's meshes.
+		</constant>
+		<constant name="PSX_BLEND_MATERIAL" value="0" enum="PSXBlend">
+			Blend as the material's transparency and blend mode say: Mix with alpha is 50% (or opaque or hidden per triangle), Add and Subtract are the PS1's own.
+		</constant>
+		<constant name="PSX_BLEND_HALF" value="1" enum="PSXBlend">
+			Every triangle at 50%: half the background plus half the polygon.
+		</constant>
+		<constant name="PSX_BLEND_ADD" value="2" enum="PSXBlend">
+			The background plus the polygon (glows, fire, light beams).
+		</constant>
+		<constant name="PSX_BLEND_SUBTRACT" value="3" enum="PSXBlend">
+			The background minus the polygon (shadows, darkening).
+		</constant>
+		<constant name="PSX_BLEND_ADD_QUARTER" value="4" enum="PSXBlend">
+			The background plus a quarter of the polygon: a faint additive glow.
+		</constant>
+	</constants>
+</class>

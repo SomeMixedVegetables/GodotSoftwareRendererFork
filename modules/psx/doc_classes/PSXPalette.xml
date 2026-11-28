@@ -1,0 +1,63 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<class name="PSXPalette" inherits="Resource" api_type="core" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="../class.xsd">
+	<brief_description>
+		A palette shared by several textures in the PS1 renderer, and swapped per material.
+	</brief_description>
+	<description>
+		A list of colours for a 16-entry (4-bit) or 256-entry (8-bit) CLUT, the colour table PS1 textures index into. Entry 0 is always transparent, so a palette holds up to 15 or 255 colours, and textures with and without cut-outs share it.
+		Textures made with one palette have the same CLUT, so they share one slot in texture memory, as PS1 games shared palettes. A texture is made with a palette in two ways:
+		- Baked: the PSX Texture importer's [code]psx/palette[/code] option, the [code]psx/palette[/code] option of model imports, or [method PSXTexture.bake].
+		- Converted when drawn: [member PSXMaterial3D.psx_palette] on a material whose texture is not baked. Every texel takes the palette's nearest colour.
+		[b]Palette swaps:[/b] when [member PSXMaterial3D.psx_palette] names a different palette of the same [member size] than the one a baked texture was made with, the renderer keeps the texture's texels and only replaces its colours, as PS1 games recoloured enemies and items. The swapped texture shares its texels with the original in texture memory. Colour [code]i[/code] of one palette replaces colour [code]i[/code] of the other, so palettes meant to be swapped should list their colours in the same order. Changing [member colors] at runtime changes every texture drawn with the palette.
+		Palette colours carry no semi-transparency bit: in a blended material, texels at half alpha are drawn opaque and only those at a quarter alpha or less are transparent.
+		The palette only affects the PS1 renderer. Godot's own renderers show the textures as they are (a baked texture shows its PS1 preview).
+	</description>
+	<tutorials>
+	</tutorials>
+	<methods>
+		<method name="generate_from_images">
+			<return type="bool" />
+			<param index="0" name="images" type="Image[]" />
+			<description>
+				Replaces [member colors] with up to [method get_max_colors] colours chosen for all of [param images] together (a median cut over every pixel with an alpha of at least 0.5). Returns [code]false[/code], leaving the colours unchanged, when the images have no such pixels.
+			</description>
+		</method>
+		<method name="generate_from_sources">
+			<return type="bool" />
+			<description>
+				Does [method generate_from_images] with the images of [member source_textures]. This is what the inspector's [b]Generate from Source Textures[/b] button calls. Returns [code]false[/code] when there are no source textures or they have no opaque pixels.
+			</description>
+		</method>
+		<method name="get_entries" qualifiers="const">
+			<return type="int" />
+			<description>
+				The CLUT's entries: 16 or 256.
+			</description>
+		</method>
+		<method name="get_max_colors" qualifiers="const">
+			<return type="int" />
+			<description>
+				The most colours the palette holds: 15 or 255 (entry 0 is transparent).
+			</description>
+		</method>
+	</methods>
+	<members>
+		<member name="colors" type="PackedColorArray" setter="set_colors" getter="get_colors" default="PackedColorArray()">
+			The palette's colours, in sRGB. Alpha is not used. They are stored at the PS1's 15-bit colour depth when drawn, and colours past [method get_max_colors] are dropped.
+		</member>
+		<member name="size" type="int" setter="set_size" getter="get_size" enum="PSXPalette.PaletteSize" default="0">
+			The CLUT size, which is also the depth of the textures made with the palette: [constant SIZE_16] for 4-bit textures, [constant SIZE_256] for 8-bit ones. A palette swap needs two palettes of the same size.
+		</member>
+		<member name="source_textures" type="Texture2D[]" setter="set_source_textures" getter="get_source_textures" default="[]">
+			Textures [method generate_from_sources] makes the palette from. They are kept with the palette so it can be generated again after they change.
+		</member>
+	</members>
+	<constants>
+		<constant name="SIZE_16" value="0" enum="PaletteSize">
+			16 entries: 4-bit textures, up to 15 colours.
+		</constant>
+		<constant name="SIZE_256" value="1" enum="PaletteSize">
+			256 entries: 8-bit textures, up to 255 colours.
+		</constant>
+	</constants>
+</class>

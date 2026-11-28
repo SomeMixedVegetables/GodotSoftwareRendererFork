@@ -189,6 +189,9 @@ private:
 		RID proxy_to;
 		Vector<RID> proxies;
 
+		// Set from content_serial whenever the image changes (PSX module).
+		uint64_t content_version = 0;
+
 		HashSet<RID> lightmap_users;
 
 		RenderingServerTypes::TextureDetectCallback detect_3d_callback = nullptr;
@@ -209,6 +212,7 @@ private:
 
 	// Textures can be created from threads, so this RID_Owner is thread safe.
 	mutable RID_Owner<Texture, true> texture_owner;
+	uint64_t content_serial = 0; // Last Texture::content_version handed out
 	Texture *get_texture(RID p_rid) { return texture_owner.get_or_null(p_rid); }
 
 	struct TextureToRDFormat {
@@ -647,6 +651,19 @@ public:
 	virtual void texture_rd_initialize(RID p_texture, const RID &p_rd_texture, const RSE::TextureLayeredType p_layer_type = RSE::TEXTURE_LAYERED_2D_ARRAY) override;
 
 	virtual RID texture_get_rd_texture(RID p_texture, bool p_srgb = false) const override;
+	// Changes whenever the texture's image does (update or replace), through
+	// proxies; for a render target (ViewportTexture), every frame. Lets
+	// renderers that keep their own copy of a texture know when to read it
+	// again (PSX module).
+	uint64_t texture_get_content_version(RID p_texture) const;
+	bool texture_is_render_target(RID p_texture) const;
+	// texture_2d_get in two halves, so many textures can be read with one
+	// wait for the GPU (PSX module): the RenderingDevice texture whose layer
+	// 0 to read (with RenderingDevice::texture_get_data_async), or an invalid
+	// RID when texture_2d_get needs no read (its image is kept); then the
+	// image texture_2d_get would return, built from the data read.
+	RID texture_2d_get_read_source(RID p_texture) const;
+	Ref<Image> texture_2d_get_from_data(RID p_texture, const Vector<uint8_t> &p_data) const;
 	virtual uint64_t texture_get_native_handle(RID p_texture, bool p_srgb = false) const override;
 
 	//internal usage

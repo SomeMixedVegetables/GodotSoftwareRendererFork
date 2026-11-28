@@ -1,0 +1,25 @@
+[gd_resource type="Skin" format=3]
+
+[resource]
+bind_count = 7
+bind/0/name = &"hips"
+bind/0/bone = -1
+bind/0/pose = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, -0.9, 0)
+bind/1/name = &"torso"
+bind/1/bone = -1
+bind/1/pose = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, -1, 0)
+bind/2/name = &"head"
+bind/2/bone = -1
+bind/2/pose = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, -1.55, 0)
+bind/3/name = &"leg_l"
+bind/3/bone = -1
+bind/3/pose = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.12, -0.84999996, 0)
+bind/4/name = &"leg_r"
+bind/4/bone = -1
+bind/4/pose = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.12, -0.84999996, 0)
+bind/5/name = &"arm_l"
+bind/5/bone = -1
+bind/5/pose = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.3, -1.45, 0)
+bind/6/name = &"arm_r"
+bind/6/bone = -1
+bind/6/pose = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.3, -1.45, 0)

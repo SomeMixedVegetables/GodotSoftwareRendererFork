@@ -6,4 +6,4 @@
   </a>
 </p>
 
-This is a fork of the Godot Game Engine with the goal of adding a PS1 style software renderer to the Godot Game engine.
+This is a fork of the Godot Game Engine with the goal of adding a PS1 era style software renderer to the Godot Game Engine.

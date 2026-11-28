@@ -504,6 +504,12 @@ public:
 	virtual void particles_set_view_axis(RID p_particles, const Vector3 &p_axis, const Vector3 &p_up_axis) override;
 
 	virtual bool particles_is_inactive(RID p_particles) const override;
+	// The particles' instance data as last copied for drawing (3D only): per
+	// particle a 3x4 transform (three rows), colour and custom data, 20
+	// floats; r_trail_steps > 1 when the particles have trails. Empty before
+	// the particles are first processed. Reading it waits for the GPU, for
+	// renderers that draw particles themselves (PSX module).
+	Vector<uint8_t> particles_get_instance_data(RID p_particles, uint32_t &r_amount, uint32_t &r_trail_steps) const;
 
 	_FORCE_INLINE_ RSE::ParticlesMode particles_get_mode(RID p_particles) {
 		Particles *particles = particles_owner.get_or_null(p_particles);

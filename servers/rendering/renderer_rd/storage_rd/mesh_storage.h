@@ -397,6 +397,9 @@ public:
 	virtual RID mesh_surface_get_attribute_buffer_rd_rid(RID p_mesh, int p_surface) const override;
 	virtual RID mesh_surface_get_skin_buffer_rd_rid(RID p_mesh, int p_surface) const override;
 	virtual RID mesh_surface_get_index_buffer_rd_rid(RID p_mesh, int p_surface) const override;
+	// The buffer mesh_get_surface reads blend_shape_data from (PSX module,
+	// to read it with other buffers in one wait for the GPU).
+	RID mesh_surface_get_blend_shape_buffer_rd_rid(RID p_mesh, int p_surface) const;
 
 	virtual int mesh_get_surface_count(RID p_mesh) const override;
 
@@ -652,6 +655,13 @@ public:
 	virtual void mesh_instance_free(RID p_rid) override;
 	virtual void mesh_instance_set_skeleton(RID p_mesh_instance, RID p_skeleton) override;
 	virtual void mesh_instance_set_blend_shape_weight(RID p_mesh_instance, int p_shape, float p_weight) override;
+	// The blend shape weights set on a mesh instance (one per blend shape), or
+	// null when it has none; for renderers that apply blend shapes themselves
+	// (PSX module).
+	const LocalVector<float> *mesh_instance_get_blend_weights(RID p_mesh_instance) const {
+		const MeshInstance *mi = mesh_instance_owner.get_or_null(p_mesh_instance);
+		return (mi && !mi->blend_weights.is_empty()) ? &mi->blend_weights : nullptr;
+	}
 	virtual void mesh_instance_check_for_update(RID p_mesh_instance) override;
 	virtual void mesh_instance_set_canvas_item_transform(RID p_mesh_instance, const Transform2D &p_transform) override;
 	virtual void update_mesh_instances() override;

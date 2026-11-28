@@ -1,0 +1,1191 @@
+[gd_scene load_steps=5 format=3]
+
+; 192 skinned walkers (props/walker.tscn, made by tools/make_crowd.gd)
+; for profiling the PS1 renderer at scale: CPU skinning of every walker
+; every frame. Each walker's AnimationPlayer runs at its own speed.
+
+[ext_resource type="PackedScene" path="res://props/walker.tscn" id="1"]
+
+[sub_resource type="PlaneMesh" id="ground"]
+size = Vector2(20, 16)
+
+[sub_resource type="StandardMaterial3D" id="grass"]
+albedo_color = Color(0.35, 0.55, 0.3, 1)
+
+[sub_resource type="Environment" id="env"]
+background_mode = 1
+background_color = Color(0.5, 0.65, 0.85, 1)
+ambient_light_source = 2
+ambient_light_color = Color(1, 1, 1, 1)
+ambient_light_energy = 0.35
+
+[node name="Crowd" type="Node3D"]
+
+[node name="WorldEnvironment" type="WorldEnvironment" parent="."]
+environment = SubResource("env")
+
+[node name="Camera3D" type="Camera3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 0.866, 0.5, 0, -0.5, 0.866, 0, 7, 12)
+fov = 60.0
+
+[node name="Sun" type="DirectionalLight3D" parent="."]
+transform = Transform3D(0.866, -0.354, 0.354, 0, 0.707, 0.707, -0.5, -0.612, 0.612, 0, 5, 0)
+
+[node name="Ground" type="MeshInstance3D" parent="."]
+mesh = SubResource("ground")
+surface_material_override/0 = SubResource("grass")
+
+[node name="Walkers" type="Node3D" parent="."]
+
+[node name="Walker0" parent="Walkers" instance=ExtResource("1")]
+transform = Transform3D(1.0000, 0, -0.0000, 0, 1, 0, 0.0000, 0, 1.0000, -8.250, 0, -6.050)
+
+[node name="AnimationPlayer" parent="Walkers/Walker0"]
+speed_scale = 0.80
+
+[node name="Walker1" parent="Walkers" instance=ExtResource("1")]
+transform = Transform3D(0.7986, 0, -0.6018, 0, 1, 0, 0.6018, 0, 0.7986, -7.150, 0, -6.050)
+
+[node name="AnimationPlayer" parent="Walkers/Walker1"]
+speed_scale = 0.93
+
+[node name="Walker2" parent="Walkers" instance=ExtResource("1")]
+transform = Transform3D(0.2756, 0, -0.9613, 0, 1, 0, 0.9613, 0, 0.2756, -6.050, 0, -6.050)
+
+[node name="AnimationPlayer" parent="Walkers/Walker2"]
+speed_scale = 1.06
+
+[node name="Walker3" parent="Walkers" instance=ExtResource("1")]
+transform = Transform3D(-0.3584, 0, -0.9336, 0, 1, 0, 0.9336, 0, -0.3584, -4.950, 0, -6.050)
+
+[node name="AnimationPlayer" parent="Walkers/Walker3"]
+speed_scale = 1.19
+
+[node name="Walker4" parent="Walkers" instance=ExtResource("1")]
+transform = Transform3D(-0.8480, 0, -0.5299, 0, 1, 0, 0.5299, 0, -0.8480, -3.850, 0, -6.050)
+
+[node name="AnimationPlayer" parent="Walkers/Walker4"]
+speed_scale = 0.92
+
+[node name="Walker5" parent="Walkers" instance=ExtResource("1")]
+transform = Transform3D(-0.9962, 0, 0.0872, 0, 1, 0, -0.0872, 0, -0.9962, -2.750, 0, -6.050)
+
+[node name="AnimationPlayer" parent="Walkers/Walker5"]
+speed_scale = 1.05
+
+[node name="Walker6" parent="Walkers" instance=ExtResource("1")]
+transform = Transform3D(-0.7431, 0, 0.6691, 0, 1, 0, -0.6691, 0, -0.7431, -1.650, 0, -6.050)
+
+[node name="AnimationPlayer" parent="Walkers/Walker6"]
+speed_scale = 1.18
+
+[node name="Walker7" parent="Walkers" instance=ExtResource("1")]
+transform = Transform3D(-0.1908, 0, 0.9816, 0, 1, 0, -0.9816, 0, -0.1908, -0.550, 0, -6.050)
+
+[node name="AnimationPlayer" parent="Walkers/Walker7"]
+speed_scale = 0.91
+
+[node name="Walker8" parent="Walkers" instance=ExtResource("1")]
+transform = Transform3D(0.4384, 0, 0.8988, 0, 1, 0, -0.8988, 0, 0.4384, 0.550, 0, -6.050)
+
+[node name="AnimationPlayer" parent="Walkers/Walker8"]
+speed_scale = 1.04
+
+[node name="Walker9" parent="Walkers" instance=ExtResource("1")]
+transform = Transform3D(0.8910, 0, 0.4540, 0, 1, 0, -0.4540, 0, 0.8910, 1.650, 0, -6.050)
+
+[node name="AnimationPlayer" parent="Walkers/Walker9"]
+speed_scale = 1.17
+
+[node name="Walker10" parent="Walkers" instance=ExtResource("1")]
+transform = Transform3D(0.9848, 0, -0.1736, 0, 1, 0, 0.1736, 0, 0.9848, 2.750, 0, -6.050)
+
+[node name="AnimationPlayer" parent="Walkers/Walker10"]
+speed_scale = 0.90
+
+[node name="Walker11" parent="Walkers" instance=ExtResource("1")]
+transform = Transform3D(0.6820, 0, -0.7314, 0, 1, 0, 0.7314, 0, 0.6820, 3.850, 0, -6.050)
+
+[node name="AnimationPlayer" parent="Walkers/Walker11"]
+speed_scale = 1.03
+
+[node name="Walker12" parent="Walkers" instance=ExtResource("1")]
+transform = Transform3D(0.1045, 0, -0.9945, 0, 1, 0, 0.9945, 0, 0.1045, 4.950, 0, -6.050)
+
+[node name="AnimationPlayer" parent="Walkers/Walker12"]
+speed_scale = 1.16
+
+[node name="Walker13" parent="Walkers" instance=ExtResource("1")]
+transform = Transform3D(-0.5150, 0, -0.8572, 0, 1, 0, 0.8572, 0, -0.5150, 6.050, 0, -6.050)
+
+[node name="AnimationPlayer" parent="Walkers/Walker13"]
+speed_scale = 0.89
+
+[node name="Walker14" parent="Walkers" instance=ExtResource("1")]
+transform = Transform3D(-0.9272, 0, -0.3746, 0, 1, 0, 0.3746, 0, -0.9272, 7.150, 0, -6.050)
+
+[node name="AnimationPlayer" parent="Walkers/Walker14"]
+speed_scale = 1.02
+
+[node name="Walker15" parent="Walkers" instance=ExtResource("1")]
+transform = Transform3D(-0.9659, 0, 0.2588, 0, 1, 0, -0.2588, 0, -0.9659, 8.250, 0, -6.050)
+
+[node name="AnimationPlayer" parent="Walkers/Walker15"]
+speed_scale = 1.15
+
+[node name="Walker16" parent="Walkers" instance=ExtResource("1")]
+transform = Transform3D(-0.6157, 0, 0.7880, 0, 1, 0, -0.7880, 0, -0.6157, -8.250, 0, -4.950)
+
+[node name="AnimationPlayer" parent="Walkers/Walker16"]
+speed_scale = 0.88
+
+[node name="Walker17" parent="Walkers" instance=ExtResource("1")]
+transform = Transform3D(-0.0175, 0, 0.9998, 0, 1, 0, -0.9998, 0, -0.0175, -7.150, 0, -4.950)
+
+[node name="AnimationPlayer" parent="Walkers/Walker17"]
+speed_scale = 1.01
+
+[node name="Walker18" parent="Walkers" instance=ExtResource("1")]
+transform = Transform3D(0.5878, 0, 0.8090, 0, 1, 0, -0.8090, 0, 0.5878, -6.050, 0, -4.950)
+
+[node name="AnimationPlayer" parent="Walkers/Walker18"]
+speed_scale = 1.14
+
+[node name="Walker19" parent="Walkers" instance=ExtResource("1")]
+transform = Transform3D(0.9563, 0, 0.2924, 0, 1, 0, -0.2924, 0, 0.9563, -4.950, 0, -4.950)
+
+[node name="AnimationPlayer" parent="Walkers/Walker19"]
+speed_scale = 0.87
+
+[node name="Walker20" parent="Walkers" instance=ExtResource("1")]
+transform = Transform3D(0.9397, 0, -0.3420, 0, 1, 0, 0.3420, 0, 0.9397, -3.850, 0, -4.950)
+
+[node name="AnimationPlayer" parent="Walkers/Walker20"]
+speed_scale = 1.00
+
+[node name="Walker21" parent="Walkers" instance=ExtResource("1")]
+transform = Transform3D(0.5446, 0, -0.8387, 0, 1, 0, 0.8387, 0, 0.5446, -2.750, 0, -4.950)
+
+[node name="AnimationPlayer" parent="Walkers/Walker21"]
+speed_scale = 1.13
+
+[node name="Walker22" parent="Walkers" instance=ExtResource("1")]
+transform = Transform3D(-0.0698, 0, -0.9976, 0, 1, 0, 0.9976, 0, -0.0698, -1.650, 0, -4.950)
+
+[node name="AnimationPlayer" parent="Walkers/Walker22"]
+speed_scale = 0.86
+
+[node name="Walker23" parent="Walkers" instance=ExtResource("1")]
+transform = Transform3D(-0.6561, 0, -0.7547, 0, 1, 0, 0.7547, 0, -0.6561, -0.550, 0, -4.950)
+
+[node name="AnimationPlayer" parent="Walkers/Walker23"]
+speed_scale = 0.99
+
+[node name="Walker24" parent="Walkers" instance=ExtResource("1")]
+transform = Transform3D(-0.9781, 0, -0.2079, 0, 1, 0, 0.2079, 0, -0.9781, 0.550, 0, -4.950)
+
+[node name="AnimationPlayer" parent="Walkers/Walker24"]
+speed_scale = 1.12
+
+[node name="Walker25" parent="Walkers" instance=ExtResource("1")]
+transform = Transform3D(-0.9063, 0, 0.4226, 0, 1, 0, -0.4226, 0, -0.9063, 1.650, 0, -4.950)
+
+[node name="AnimationPlayer" parent="Walkers/Walker25"]
+speed_scale = 0.85
+
+[node name="Walker26" parent="Walkers" instance=ExtResource("1")]
+transform = Transform3D(-0.4695, 0, 0.8829, 0, 1, 0, -0.8829, 0, -0.4695, 2.750, 0, -4.950)
+
+[node name="AnimationPlayer" parent="Walkers/Walker26"]
+speed_scale = 0.98
+
+[node name="Walker27" parent="Walkers" instance=ExtResource("1")]
+transform = Transform3D(0.1564, 0, 0.9877, 0, 1, 0, -0.9877, 0, 0.1564, 3.850, 0, -4.950)
+
+[node name="AnimationPlayer" parent="Walkers/Walker27"]
+speed_scale = 1.11
+
+[node name="Walker28" parent="Walkers" instance=ExtResource("1")]
+transform = Transform3D(0.7193, 0, 0.6947, 0, 1, 0, -0.6947, 0, 0.7193, 4.950, 0, -4.950)
+
+[node name="AnimationPlayer" parent="Walkers/Walker28"]
+speed_scale = 0.84
+
+[node name="Walker29" parent="Walkers" instance=ExtResource("1")]
+transform = Transform3D(0.9925, 0, 0.1219, 0, 1, 0, -0.1219, 0, 0.9925, 6.050, 0, -4.950)
+
+[node name="AnimationPlayer" parent="Walkers/Walker29"]
+speed_scale = 0.97
+
+[node name="Walker30" parent="Walkers" instance=ExtResource("1")]
+transform = Transform3D(0.8660, 0, -0.5000, 0, 1, 0, 0.5000, 0, 0.8660, 7.150, 0, -4.950)
+
+[node name="AnimationPlayer" parent="Walkers/Walker30"]
+speed_scale = 1.10
+
+[node name="Walker31" parent="Walkers" instance=ExtResource("1")]
+transform = Transform3D(0.3907, 0, -0.9205, 0, 1, 0, 0.9205, 0, 0.3907, 8.250, 0, -4.950)
+
+[node name="AnimationPlayer" parent="Walkers/Walker31"]
+speed_scale = 0.83
+
+[node name="Walker32" parent="Walkers" instance=ExtResource("1")]
+transform = Transform3D(-0.2419, 0, -0.9703, 0, 1, 0, 0.9703, 0, -0.2419, -8.250, 0, -3.850)
+
+[node name="AnimationPlayer" parent="Walkers/Walker32"]
+speed_scale = 0.96
+
+[node name="Walker33" parent="Walkers" instance=ExtResource("1")]
+transform = Transform3D(-0.7771, 0, -0.6293, 0, 1, 0, 0.6293, 0, -0.7771, -7.150, 0, -3.850)
+
+[node name="AnimationPlayer" parent="Walkers/Walker33"]
+speed_scale = 1.09
+
+[node name="Walker34" parent="Walkers" instance=ExtResource("1")]
+transform = Transform3D(-0.9994, 0, -0.0349, 0, 1, 0, 0.0349, 0, -0.9994, -6.050, 0, -3.850)
+
+[node name="AnimationPlayer" parent="Walkers/Walker34"]
+speed_scale = 0.82
+
+[node name="Walker35" parent="Walkers" instance=ExtResource("1")]
+transform = Transform3D(-0.8192, 0, 0.5736, 0, 1, 0, -0.5736, 0, -0.8192, -4.950, 0, -3.850)
+
+[node name="AnimationPlayer" parent="Walkers/Walker35"]
+speed_scale = 0.95
+
+[node name="Walker36" parent="Walkers" instance=ExtResource("1")]
+transform = Transform3D(-0.3090, 0, 0.9511, 0, 1, 0, -0.9511, 0, -0.3090, -3.850, 0, -3.850)
+
+[node name="AnimationPlayer" parent="Walkers/Walker36"]
+speed_scale = 1.08
+
+[node name="Walker37" parent="Walkers" instance=ExtResource("1")]
+transform = Transform3D(0.3256, 0, 0.9455, 0, 1, 0, -0.9455, 0, 0.3256, -2.750, 0, -3.850)
+
+[node name="AnimationPlayer" parent="Walkers/Walker37"]
+speed_scale = 0.81
+
+[node name="Walker38" parent="Walkers" instance=ExtResource("1")]
+transform = Transform3D(0.8290, 0, 0.5592, 0, 1, 0, -0.5592, 0, 0.8290, -1.650, 0, -3.850)
+
+[node name="AnimationPlayer" parent="Walkers/Walker38"]
+speed_scale = 0.94
+
+[node name="Walker39" parent="Walkers" instance=ExtResource("1")]
+transform = Transform3D(0.9986, 0, -0.0523, 0, 1, 0, 0.0523, 0, 0.9986, -0.550, 0, -3.850)
+
+[node name="AnimationPlayer" parent="Walkers/Walker39"]
+speed_scale = 1.07
+
+[node name="Walker40" parent="Walkers" instance=ExtResource("1")]
+transform = Transform3D(0.7660, 0, -0.6428, 0, 1, 0, 0.6428, 0, 0.7660, 0.550, 0, -3.850)
+
+[node name="AnimationPlayer" parent="Walkers/Walker40"]
+speed_scale = 0.80
+
+[node name="Walker41" parent="Walkers" instance=ExtResource("1")]
+transform = Transform3D(0.2250, 0, -0.9744, 0, 1, 0, 0.9744, 0, 0.2250, 1.650, 0, -3.850)
+
+[node name="AnimationPlayer" parent="Walkers/Walker41"]
+speed_scale = 0.93
+
+[node name="Walker42" parent="Walkers" instance=ExtResource("1")]
+transform = Transform3D(-0.4067, 0, -0.9135, 0, 1, 0, 0.9135, 0, -0.4067, 2.750, 0, -3.850)
+
+[node name="AnimationPlayer" parent="Walkers/Walker42"]
+speed_scale = 1.06
+
+[node name="Walker43" parent="Walkers" instance=ExtResource("1")]
+transform = Transform3D(-0.8746, 0, -0.4848, 0, 1, 0, 0.4848, 0, -0.8746, 3.850, 0, -3.850)
+
+[node name="AnimationPlayer" parent="Walkers/Walker43"]
+speed_scale = 1.19
+
+[node name="Walker44" parent="Walkers" instance=ExtResource("1")]
+transform = Transform3D(-0.9903, 0, 0.1392, 0, 1, 0, -0.1392, 0, -0.9903, 4.950, 0, -3.850)
+
+[node name="AnimationPlayer" parent="Walkers/Walker44"]
+speed_scale = 0.92
+
+[node name="Walker45" parent="Walkers" instance=ExtResource("1")]
+transform = Transform3D(-0.7071, 0, 0.7071, 0, 1, 0, -0.7071, 0, -0.7071, 6.050, 0, -3.850)
+
+[node name="AnimationPlayer" parent="Walkers/Walker45"]
+speed_scale = 1.05
+
+[node name="Walker46" parent="Walkers" instance=ExtResource("1")]
+transform = Transform3D(-0.1392, 0, 0.9903, 0, 1, 0, -0.9903, 0, -0.1392, 7.150, 0, -3.850)
+
+[node name="AnimationPlayer" parent="Walkers/Walker46"]
+speed_scale = 1.18
+
+[node name="Walker47" parent="Walkers" instance=ExtResource("1")]
+transform = Transform3D(0.4848, 0, 0.8746, 0, 1, 0, -0.8746, 0, 0.4848, 8.250, 0, -3.850)
+
+[node name="AnimationPlayer" parent="Walkers/Walker47"]
+speed_scale = 0.91
+
+[node name="Walker48" parent="Walkers" instance=ExtResource("1")]
+transform = Transform3D(0.9135, 0, 0.4067, 0, 1, 0, -0.4067, 0, 0.9135, -8.250, 0, -2.750)
+
+[node name="AnimationPlayer" parent="Walkers/Walker48"]
+speed_scale = 1.04
+
+[node name="Walker49" parent="Walkers" instance=ExtResource("1")]
+transform = Transform3D(0.9744, 0, -0.2250, 0, 1, 0, 0.2250, 0, 0.9744, -7.150, 0, -2.750)
+
+[node name="AnimationPlayer" parent="Walkers/Walker49"]
+speed_scale = 1.17
+
+[node name="Walker50" parent="Walkers" instance=ExtResource("1")]
+transform = Transform3D(0.6428, 0, -0.7660, 0, 1, 0, 0.7660, 0, 0.6428, -6.050, 0, -2.750)
+
+[node name="AnimationPlayer" parent="Walkers/Walker50"]
+speed_scale = 0.90
+
+[node name="Walker51" parent="Walkers" instance=ExtResource("1")]
+transform = Transform3D(0.0523, 0, -0.9986, 0, 1, 0, 0.9986, 0, 0.0523, -4.950, 0, -2.750)
+
+[node name="AnimationPlayer" parent="Walkers/Walker51"]
+speed_scale = 1.03
+
+[node name="Walker52" parent="Walkers" instance=ExtResource("1")]
+transform = Transform3D(-0.5592, 0, -0.8290, 0, 1, 0, 0.8290, 0, -0.5592, -3.850, 0, -2.750)
+
+[node name="AnimationPlayer" parent="Walkers/Walker52"]
+speed_scale = 1.16
+
+[node name="Walker53" parent="Walkers" instance=ExtResource("1")]
+transform = Transform3D(-0.9455, 0, -0.3256, 0, 1, 0, 0.3256, 0, -0.9455, -2.750, 0, -2.750)
+
+[node name="AnimationPlayer" parent="Walkers/Walker53"]
+speed_scale = 0.89
+
+[node name="Walker54" parent="Walkers" instance=ExtResource("1")]
+transform = Transform3D(-0.9511, 0, 0.3090, 0, 1, 0, -0.3090, 0, -0.9511, -1.650, 0, -2.750)
+
+[node name="AnimationPlayer" parent="Walkers/Walker54"]
+speed_scale = 1.02
+
+[node name="Walker55" parent="Walkers" instance=ExtResource("1")]
+transform = Transform3D(-0.5736, 0, 0.8192, 0, 1, 0, -0.8192, 0, -0.5736, -0.550, 0, -2.750)
+
+[node name="AnimationPlayer" parent="Walkers/Walker55"]
+speed_scale = 1.15
+
+[node name="Walker56" parent="Walkers" instance=ExtResource("1")]
+transform = Transform3D(0.0349, 0, 0.9994, 0, 1, 0, -0.9994, 0, 0.0349, 0.550, 0, -2.750)
+
+[node name="AnimationPlayer" parent="Walkers/Walker56"]
+speed_scale = 0.88
+
+[node name="Walker57" parent="Walkers" instance=ExtResource("1")]
+transform = Transform3D(0.6293, 0, 0.7771, 0, 1, 0, -0.7771, 0, 0.6293, 1.650, 0, -2.750)
+
+[node name="AnimationPlayer" parent="Walkers/Walker57"]
+speed_scale = 1.01
+
+[node name="Walker58" parent="Walkers" instance=ExtResource("1")]
+transform = Transform3D(0.9703, 0, 0.2419, 0, 1, 0, -0.2419, 0, 0.9703, 2.750, 0, -2.750)
+
+[node name="AnimationPlayer" parent="Walkers/Walker58"]
+speed_scale = 1.14
+
+[node name="Walker59" parent="Walkers" instance=ExtResource("1")]
+transform = Transform3D(0.9205, 0, -0.3907, 0, 1, 0, 0.3907, 0, 0.9205, 3.850, 0, -2.750)
+
+[node name="AnimationPlayer" parent="Walkers/Walker59"]
+speed_scale = 0.87
+
+[node name="Walker60" parent="Walkers" instance=ExtResource("1")]
+transform = Transform3D(0.5000, 0, -0.8660, 0, 1, 0, 0.8660, 0, 0.5000, 4.950, 0, -2.750)
+
+[node name="AnimationPlayer" parent="Walkers/Walker60"]
+speed_scale = 1.00
+
+[node name="Walker61" parent="Walkers" instance=ExtResource("1")]
+transform = Transform3D(-0.1219, 0, -0.9925, 0, 1, 0, 0.9925, 0, -0.1219, 6.050, 0, -2.750)
+
+[node name="AnimationPlayer" parent="Walkers/Walker61"]
+speed_scale = 1.13
+
+[node name="Walker62" parent="Walkers" instance=ExtResource("1")]
+transform = Transform3D(-0.6947, 0, -0.7193, 0, 1, 0, 0.7193, 0, -0.6947, 7.150, 0, -2.750)
+
+[node name="AnimationPlayer" parent="Walkers/Walker62"]
+speed_scale = 0.86
+
+[node name="Walker63" parent="Walkers" instance=ExtResource("1")]
+transform = Transform3D(-0.9877, 0, -0.1564, 0, 1, 0, 0.1564, 0, -0.9877, 8.250, 0, -2.750)
+
+[node name="AnimationPlayer" parent="Walkers/Walker63"]
+speed_scale = 0.99
+
+[node name="Walker64" parent="Walkers" instance=ExtResource("1")]
+transform = Transform3D(-0.8829, 0, 0.4695, 0, 1, 0, -0.4695, 0, -0.8829, -8.250, 0, -1.650)
+
+[node name="AnimationPlayer" parent="Walkers/Walker64"]
+speed_scale = 1.12
+
+[node name="Walker65" parent="Walkers" instance=ExtResource("1")]
+transform = Transform3D(-0.4226, 0, 0.9063, 0, 1, 0, -0.9063, 0, -0.4226, -7.150, 0, -1.650)
+
+[node name="AnimationPlayer" parent="Walkers/Walker65"]
+speed_scale = 0.85
+
+[node name="Walker66" parent="Walkers" instance=ExtResource("1")]
+transform = Transform3D(0.2079, 0, 0.9781, 0, 1, 0, -0.9781, 0, 0.2079, -6.050, 0, -1.650)
+
+[node name="AnimationPlayer" parent="Walkers/Walker66"]
+speed_scale = 0.98
+
+[node name="Walker67" parent="Walkers" instance=ExtResource("1")]
+transform = Transform3D(0.7547, 0, 0.6561, 0, 1, 0, -0.6561, 0, 0.7547, -4.950, 0, -1.650)
+
+[node name="AnimationPlayer" parent="Walkers/Walker67"]
+speed_scale = 1.11
+
+[node name="Walker68" parent="Walkers" instance=ExtResource("1")]
+transform = Transform3D(0.9976, 0, 0.0698, 0, 1, 0, -0.0698, 0, 0.9976, -3.850, 0, -1.650)
+
+[node name="AnimationPlayer" parent="Walkers/Walker68"]
+speed_scale = 0.84
+
+[node name="Walker69" parent="Walkers" instance=ExtResource("1")]
+transform = Transform3D(0.8387, 0, -0.5446, 0, 1, 0, 0.5446, 0, 0.8387, -2.750, 0, -1.650)
+
+[node name="AnimationPlayer" parent="Walkers/Walker69"]
+speed_scale = 0.97
+
+[node name="Walker70" parent="Walkers" instance=ExtResource("1")]
+transform = Transform3D(0.3420, 0, -0.9397, 0, 1, 0, 0.9397, 0, 0.3420, -1.650, 0, -1.650)
+
+[node name="AnimationPlayer" parent="Walkers/Walker70"]
+speed_scale = 1.10
+
+[node name="Walker71" parent="Walkers" instance=ExtResource("1")]
+transform = Transform3D(-0.2924, 0, -0.9563, 0, 1, 0, 0.9563, 0, -0.2924, -0.550, 0, -1.650)
+
+[node name="AnimationPlayer" parent="Walkers/Walker71"]
+speed_scale = 0.83
+
+[node name="Walker72" parent="Walkers" instance=ExtResource("1")]
+transform = Transform3D(-0.8090, 0, -0.5878, 0, 1, 0, 0.5878, 0, -0.8090, 0.550, 0, -1.650)
+
+[node name="AnimationPlayer" parent="Walkers/Walker72"]
+speed_scale = 0.96
+
+[node name="Walker73" parent="Walkers" instance=ExtResource("1")]
+transform = Transform3D(-0.9998, 0, 0.0175, 0, 1, 0, -0.0175, 0, -0.9998, 1.650, 0, -1.650)
+
+[node name="AnimationPlayer" parent="Walkers/Walker73"]
+speed_scale = 1.09
+
+[node name="Walker74" parent="Walkers" instance=ExtResource("1")]
+transform = Transform3D(-0.7880, 0, 0.6157, 0, 1, 0, -0.6157, 0, -0.7880, 2.750, 0, -1.650)
+
+[node name="AnimationPlayer" parent="Walkers/Walker74"]
+speed_scale = 0.82
+
+[node name="Walker75" parent="Walkers" instance=ExtResource("1")]
+transform = Transform3D(-0.2588, 0, 0.9659, 0, 1, 0, -0.9659, 0, -0.2588, 3.850, 0, -1.650)
+
+[node name="AnimationPlayer" parent="Walkers/Walker75"]
+speed_scale = 0.95
+
+[node name="Walker76" parent="Walkers" instance=ExtResource("1")]
+transform = Transform3D(0.3746, 0, 0.9272, 0, 1, 0, -0.9272, 0, 0.3746, 4.950, 0, -1.650)
+
+[node name="AnimationPlayer" parent="Walkers/Walker76"]
+speed_scale = 1.08
+
+[node name="Walker77" parent="Walkers" instance=ExtResource("1")]
+transform = Transform3D(0.8572, 0, 0.5150, 0, 1, 0, -0.5150, 0, 0.8572, 6.050, 0, -1.650)
+
+[node name="AnimationPlayer" parent="Walkers/Walker77"]
+speed_scale = 0.81
+
+[node name="Walker78" parent="Walkers" instance=ExtResource("1")]
+transform = Transform3D(0.9945, 0, -0.1045, 0, 1, 0, 0.1045, 0, 0.9945, 7.150, 0, -1.650)
+
+[node name="AnimationPlayer" parent="Walkers/Walker78"]
+speed_scale = 0.94
+
+[node name="Walker79" parent="Walkers" instance=ExtResource("1")]
+transform = Transform3D(0.7314, 0, -0.6820, 0, 1, 0, 0.6820, 0, 0.7314, 8.250, 0, -1.650)
+
+[node name="AnimationPlayer" parent="Walkers/Walker79"]
+speed_scale = 1.07
+
+[node name="Walker80" parent="Walkers" instance=ExtResource("1")]
+transform = Transform3D(0.1736, 0, -0.9848, 0, 1, 0, 0.9848, 0, 0.1736, -8.250, 0, -0.550)
+
+[node name="AnimationPlayer" parent="Walkers/Walker80"]
+speed_scale = 0.80
+
+[node name="Walker81" parent="Walkers" instance=ExtResource("1")]
+transform = Transform3D(-0.4540, 0, -0.8910, 0, 1, 0, 0.8910, 0, -0.4540, -7.150, 0, -0.550)
+
+[node name="AnimationPlayer" parent="Walkers/Walker81"]
+speed_scale = 0.93
+
+[node name="Walker82" parent="Walkers" instance=ExtResource("1")]
+transform = Transform3D(-0.8988, 0, -0.4384, 0, 1, 0, 0.4384, 0, -0.8988, -6.050, 0, -0.550)
+
+[node name="AnimationPlayer" parent="Walkers/Walker82"]
+speed_scale = 1.06
+
+[node name="Walker83" parent="Walkers" instance=ExtResource("1")]
+transform = Transform3D(-0.9816, 0, 0.1908, 0, 1, 0, -0.1908, 0, -0.9816, -4.950, 0, -0.550)
+
+[node name="AnimationPlayer" parent="Walkers/Walker83"]
+speed_scale = 1.19
+
+[node name="Walker84" parent="Walkers" instance=ExtResource("1")]
+transform = Transform3D(-0.6691, 0, 0.7431, 0, 1, 0, -0.7431, 0, -0.6691, -3.850, 0, -0.550)
+
+[node name="AnimationPlayer" parent="Walkers/Walker84"]
+speed_scale = 0.92
+
+[node name="Walker85" parent="Walkers" instance=ExtResource("1")]
+transform = Transform3D(-0.0872, 0, 0.9962, 0, 1, 0, -0.9962, 0, -0.0872, -2.750, 0, -0.550)
+
+[node name="AnimationPlayer" parent="Walkers/Walker85"]
+speed_scale = 1.05
+
+[node name="Walker86" parent="Walkers" instance=ExtResource("1")]
+transform = Transform3D(0.5299, 0, 0.8480, 0, 1, 0, -0.8480, 0, 0.5299, -1.650, 0, -0.550)
+
+[node name="AnimationPlayer" parent="Walkers/Walker86"]
+speed_scale = 1.18
+
+[node name="Walker87" parent="Walkers" instance=ExtResource("1")]
+transform = Transform3D(0.9336, 0, 0.3584, 0, 1, 0, -0.3584, 0, 0.9336, -0.550, 0, -0.550)
+
+[node name="AnimationPlayer" parent="Walkers/Walker87"]
+speed_scale = 0.91
+
+[node name="Walker88" parent="Walkers" instance=ExtResource("1")]
+transform = Transform3D(0.9613, 0, -0.2756, 0, 1, 0, 0.2756, 0, 0.9613, 0.550, 0, -0.550)
+
+[node name="AnimationPlayer" parent="Walkers/Walker88"]
+speed_scale = 1.04
+
+[node name="Walker89" parent="Walkers" instance=ExtResource("1")]
+transform = Transform3D(0.6018, 0, -0.7986, 0, 1, 0, 0.7986, 0, 0.6018, 1.650, 0, -0.550)
+
+[node name="AnimationPlayer" parent="Walkers/Walker89"]
+speed_scale = 1.17
+
+[node name="Walker90" parent="Walkers" instance=ExtResource("1")]
+transform = Transform3D(0.0000, 0, -1.0000, 0, 1, 0, 1.0000, 0, 0.0000, 2.750, 0, -0.550)
+
+[node name="AnimationPlayer" parent="Walkers/Walker90"]
+speed_scale = 0.90
+
+[node name="Walker91" parent="Walkers" instance=ExtResource("1")]
+transform = Transform3D(-0.6018, 0, -0.7986, 0, 1, 0, 0.7986, 0, -0.6018, 3.850, 0, -0.550)
+
+[node name="AnimationPlayer" parent="Walkers/Walker91"]
+speed_scale = 1.03
+
+[node name="Walker92" parent="Walkers" instance=ExtResource("1")]
+transform = Transform3D(-0.9613, 0, -0.2756, 0, 1, 0, 0.2756, 0, -0.9613, 4.950, 0, -0.550)
+
+[node name="AnimationPlayer" parent="Walkers/Walker92"]
+speed_scale = 1.16
+
+[node name="Walker93" parent="Walkers" instance=ExtResource("1")]
+transform = Transform3D(-0.9336, 0, 0.3584, 0, 1, 0, -0.3584, 0, -0.9336, 6.050, 0, -0.550)
+
+[node name="AnimationPlayer" parent="Walkers/Walker93"]
+speed_scale = 0.89
+
+[node name="Walker94" parent="Walkers" instance=ExtResource("1")]
+transform = Transform3D(-0.5299, 0, 0.8480, 0, 1, 0, -0.8480, 0, -0.5299, 7.150, 0, -0.550)
+
+[node name="AnimationPlayer" parent="Walkers/Walker94"]
+speed_scale = 1.02
+
+[node name="Walker95" parent="Walkers" instance=ExtResource("1")]
+transform = Transform3D(0.0872, 0, 0.9962, 0, 1, 0, -0.9962, 0, 0.0872, 8.250, 0, -0.550)
+
+[node name="AnimationPlayer" parent="Walkers/Walker95"]
+speed_scale = 1.15
+
+[node name="Walker96" parent="Walkers" instance=ExtResource("1")]
+transform = Transform3D(0.6691, 0, 0.7431, 0, 1, 0, -0.7431, 0, 0.6691, -8.250, 0, 0.550)
+
+[node name="AnimationPlayer" parent="Walkers/Walker96"]
+speed_scale = 0.88
+
+[node name="Walker97" parent="Walkers" instance=ExtResource("1")]
+transform = Transform3D(0.9816, 0, 0.1908, 0, 1, 0, -0.1908, 0, 0.9816, -7.150, 0, 0.550)
+
+[node name="AnimationPlayer" parent="Walkers/Walker97"]
+speed_scale = 1.01
+
+[node name="Walker98" parent="Walkers" instance=ExtResource("1")]
+transform = Transform3D(0.8988, 0, -0.4384, 0, 1, 0, 0.4384, 0, 0.8988, -6.050, 0, 0.550)
+
+[node name="AnimationPlayer" parent="Walkers/Walker98"]
+speed_scale = 1.14
+
+[node name="Walker99" parent="Walkers" instance=ExtResource("1")]
+transform = Transform3D(0.4540, 0, -0.8910, 0, 1, 0, 0.8910, 0, 0.4540, -4.950, 0, 0.550)
+
+[node name="AnimationPlayer" parent="Walkers/Walker99"]
+speed_scale = 0.87
+
+[node name="Walker100" parent="Walkers" instance=ExtResource("1")]
+transform = Transform3D(-0.1736, 0, -0.9848, 0, 1, 0, 0.9848, 0, -0.1736, -3.850, 0, 0.550)
+
+[node name="AnimationPlayer" parent="Walkers/Walker100"]
+speed_scale = 1.00
+
+[node name="Walker101" parent="Walkers" instance=ExtResource("1")]
+transform = Transform3D(-0.7314, 0, -0.6820, 0, 1, 0, 0.6820, 0, -0.7314, -2.750, 0, 0.550)
+
+[node name="AnimationPlayer" parent="Walkers/Walker101"]
+speed_scale = 1.13
+
+[node name="Walker102" parent="Walkers" instance=ExtResource("1")]
+transform = Transform3D(-0.9945, 0, -0.1045, 0, 1, 0, 0.1045, 0, -0.9945, -1.650, 0, 0.550)
+
+[node name="AnimationPlayer" parent="Walkers/Walker102"]
+speed_scale = 0.86
+
+[node name="Walker103" parent="Walkers" instance=ExtResource("1")]
+transform = Transform3D(-0.8572, 0, 0.5150, 0, 1, 0, -0.5150, 0, -0.8572, -0.550, 0, 0.550)
+
+[node name="AnimationPlayer" parent="Walkers/Walker103"]
+speed_scale = 0.99
+
+[node name="Walker104" parent="Walkers" instance=ExtResource("1")]
+transform = Transform3D(-0.3746, 0, 0.9272, 0, 1, 0, -0.9272, 0, -0.3746, 0.550, 0, 0.550)
+
+[node name="AnimationPlayer" parent="Walkers/Walker104"]
+speed_scale = 1.12
+
+[node name="Walker105" parent="Walkers" instance=ExtResource("1")]
+transform = Transform3D(0.2588, 0, 0.9659, 0, 1, 0, -0.9659, 0, 0.2588, 1.650, 0, 0.550)
+
+[node name="AnimationPlayer" parent="Walkers/Walker105"]
+speed_scale = 0.85
+
+[node name="Walker106" parent="Walkers" instance=ExtResource("1")]
+transform = Transform3D(0.7880, 0, 0.6157, 0, 1, 0, -0.6157, 0, 0.7880, 2.750, 0, 0.550)
+
+[node name="AnimationPlayer" parent="Walkers/Walker106"]
+speed_scale = 0.98
+
+[node name="Walker107" parent="Walkers" instance=ExtResource("1")]
+transform = Transform3D(0.9998, 0, 0.0175, 0, 1, 0, -0.0175, 0, 0.9998, 3.850, 0, 0.550)
+
+[node name="AnimationPlayer" parent="Walkers/Walker107"]
+speed_scale = 1.11
+
+[node name="Walker108" parent="Walkers" instance=ExtResource("1")]
+transform = Transform3D(0.8090, 0, -0.5878, 0, 1, 0, 0.5878, 0, 0.8090, 4.950, 0, 0.550)
+
+[node name="AnimationPlayer" parent="Walkers/Walker108"]
+speed_scale = 0.84
+
+[node name="Walker109" parent="Walkers" instance=ExtResource("1")]
+transform = Transform3D(0.2924, 0, -0.9563, 0, 1, 0, 0.9563, 0, 0.2924, 6.050, 0, 0.550)
+
+[node name="AnimationPlayer" parent="Walkers/Walker109"]
+speed_scale = 0.97
+
+[node name="Walker110" parent="Walkers" instance=ExtResource("1")]
+transform = Transform3D(-0.3420, 0, -0.9397, 0, 1, 0, 0.9397, 0, -0.3420, 7.150, 0, 0.550)
+
+[node name="AnimationPlayer" parent="Walkers/Walker110"]
+speed_scale = 1.10
+
+[node name="Walker111" parent="Walkers" instance=ExtResource("1")]
+transform = Transform3D(-0.8387, 0, -0.5446, 0, 1, 0, 0.5446, 0, -0.8387, 8.250, 0, 0.550)
+
+[node name="AnimationPlayer" parent="Walkers/Walker111"]
+speed_scale = 0.83
+
+[node name="Walker112" parent="Walkers" instance=ExtResource("1")]
+transform = Transform3D(-0.9976, 0, 0.0698, 0, 1, 0, -0.0698, 0, -0.9976, -8.250, 0, 1.650)
+
+[node name="AnimationPlayer" parent="Walkers/Walker112"]
+speed_scale = 0.96
+
+[node name="Walker113" parent="Walkers" instance=ExtResource("1")]
+transform = Transform3D(-0.7547, 0, 0.6561, 0, 1, 0, -0.6561, 0, -0.7547, -7.150, 0, 1.650)
+
+[node name="AnimationPlayer" parent="Walkers/Walker113"]
+speed_scale = 1.09
+
+[node name="Walker114" parent="Walkers" instance=ExtResource("1")]
+transform = Transform3D(-0.2079, 0, 0.9781, 0, 1, 0, -0.9781, 0, -0.2079, -6.050, 0, 1.650)
+
+[node name="AnimationPlayer" parent="Walkers/Walker114"]
+speed_scale = 0.82
+
+[node name="Walker115" parent="Walkers" instance=ExtResource("1")]
+transform = Transform3D(0.4226, 0, 0.9063, 0, 1, 0, -0.9063, 0, 0.4226, -4.950, 0, 1.650)
+
+[node name="AnimationPlayer" parent="Walkers/Walker115"]
+speed_scale = 0.95
+
+[node name="Walker116" parent="Walkers" instance=ExtResource("1")]
+transform = Transform3D(0.8829, 0, 0.4695, 0, 1, 0, -0.4695, 0, 0.8829, -3.850, 0, 1.650)
+
+[node name="AnimationPlayer" parent="Walkers/Walker116"]
+speed_scale = 1.08
+
+[node name="Walker117" parent="Walkers" instance=ExtResource("1")]
+transform = Transform3D(0.9877, 0, -0.1564, 0, 1, 0, 0.1564, 0, 0.9877, -2.750, 0, 1.650)
+
+[node name="AnimationPlayer" parent="Walkers/Walker117"]
+speed_scale = 0.81
+
+[node name="Walker118" parent="Walkers" instance=ExtResource("1")]
+transform = Transform3D(0.6947, 0, -0.7193, 0, 1, 0, 0.7193, 0, 0.6947, -1.650, 0, 1.650)
+
+[node name="AnimationPlayer" parent="Walkers/Walker118"]
+speed_scale = 0.94
+
+[node name="Walker119" parent="Walkers" instance=ExtResource("1")]
+transform = Transform3D(0.1219, 0, -0.9925, 0, 1, 0, 0.9925, 0, 0.1219, -0.550, 0, 1.650)
+
+[node name="AnimationPlayer" parent="Walkers/Walker119"]
+speed_scale = 1.07
+
+[node name="Walker120" parent="Walkers" instance=ExtResource("1")]
+transform = Transform3D(-0.5000, 0, -0.8660, 0, 1, 0, 0.8660, 0, -0.5000, 0.550, 0, 1.650)
+
+[node name="AnimationPlayer" parent="Walkers/Walker120"]
+speed_scale = 0.80
+
+[node name="Walker121" parent="Walkers" instance=ExtResource("1")]
+transform = Transform3D(-0.9205, 0, -0.3907, 0, 1, 0, 0.3907, 0, -0.9205, 1.650, 0, 1.650)
+
+[node name="AnimationPlayer" parent="Walkers/Walker121"]
+speed_scale = 0.93
+
+[node name="Walker122" parent="Walkers" instance=ExtResource("1")]
+transform = Transform3D(-0.9703, 0, 0.2419, 0, 1, 0, -0.2419, 0, -0.9703, 2.750, 0, 1.650)
+
+[node name="AnimationPlayer" parent="Walkers/Walker122"]
+speed_scale = 1.06
+
+[node name="Walker123" parent="Walkers" instance=ExtResource("1")]
+transform = Transform3D(-0.6293, 0, 0.7771, 0, 1, 0, -0.7771, 0, -0.6293, 3.850, 0, 1.650)
+
+[node name="AnimationPlayer" parent="Walkers/Walker123"]
+speed_scale = 1.19
+
+[node name="Walker124" parent="Walkers" instance=ExtResource("1")]
+transform = Transform3D(-0.0349, 0, 0.9994, 0, 1, 0, -0.9994, 0, -0.0349, 4.950, 0, 1.650)
+
+[node name="AnimationPlayer" parent="Walkers/Walker124"]
+speed_scale = 0.92
+
+[node name="Walker125" parent="Walkers" instance=ExtResource("1")]
+transform = Transform3D(0.5736, 0, 0.8192, 0, 1, 0, -0.8192, 0, 0.5736, 6.050, 0, 1.650)
+
+[node name="AnimationPlayer" parent="Walkers/Walker125"]
+speed_scale = 1.05
+
+[node name="Walker126" parent="Walkers" instance=ExtResource("1")]
+transform = Transform3D(0.9511, 0, 0.3090, 0, 1, 0, -0.3090, 0, 0.9511, 7.150, 0, 1.650)
+
+[node name="AnimationPlayer" parent="Walkers/Walker126"]
+speed_scale = 1.18
+
+[node name="Walker127" parent="Walkers" instance=ExtResource("1")]
+transform = Transform3D(0.9455, 0, -0.3256, 0, 1, 0, 0.3256, 0, 0.9455, 8.250, 0, 1.650)
+
+[node name="AnimationPlayer" parent="Walkers/Walker127"]
+speed_scale = 0.91
+
+[node name="Walker128" parent="Walkers" instance=ExtResource("1")]
+transform = Transform3D(0.5592, 0, -0.8290, 0, 1, 0, 0.8290, 0, 0.5592, -8.250, 0, 2.750)
+
+[node name="AnimationPlayer" parent="Walkers/Walker128"]
+speed_scale = 1.04
+
+[node name="Walker129" parent="Walkers" instance=ExtResource("1")]
+transform = Transform3D(-0.0523, 0, -0.9986, 0, 1, 0, 0.9986, 0, -0.0523, -7.150, 0, 2.750)
+
+[node name="AnimationPlayer" parent="Walkers/Walker129"]
+speed_scale = 1.17
+
+[node name="Walker130" parent="Walkers" instance=ExtResource("1")]
+transform = Transform3D(-0.6428, 0, -0.7660, 0, 1, 0, 0.7660, 0, -0.6428, -6.050, 0, 2.750)
+
+[node name="AnimationPlayer" parent="Walkers/Walker130"]
+speed_scale = 0.90
+
+[node name="Walker131" parent="Walkers" instance=ExtResource("1")]
+transform = Transform3D(-0.9744, 0, -0.2250, 0, 1, 0, 0.2250, 0, -0.9744, -4.950, 0, 2.750)
+
+[node name="AnimationPlayer" parent="Walkers/Walker131"]
+speed_scale = 1.03
+
+[node name="Walker132" parent="Walkers" instance=ExtResource("1")]
+transform = Transform3D(-0.9135, 0, 0.4067, 0, 1, 0, -0.4067, 0, -0.9135, -3.850, 0, 2.750)
+
+[node name="AnimationPlayer" parent="Walkers/Walker132"]
+speed_scale = 1.16
+
+[node name="Walker133" parent="Walkers" instance=ExtResource("1")]
+transform = Transform3D(-0.4848, 0, 0.8746, 0, 1, 0, -0.8746, 0, -0.4848, -2.750, 0, 2.750)
+
+[node name="AnimationPlayer" parent="Walkers/Walker133"]
+speed_scale = 0.89
+
+[node name="Walker134" parent="Walkers" instance=ExtResource("1")]
+transform = Transform3D(0.1392, 0, 0.9903, 0, 1, 0, -0.9903, 0, 0.1392, -1.650, 0, 2.750)
+
+[node name="AnimationPlayer" parent="Walkers/Walker134"]
+speed_scale = 1.02
+
+[node name="Walker135" parent="Walkers" instance=ExtResource("1")]
+transform = Transform3D(0.7071, 0, 0.7071, 0, 1, 0, -0.7071, 0, 0.7071, -0.550, 0, 2.750)
+
+[node name="AnimationPlayer" parent="Walkers/Walker135"]
+speed_scale = 1.15
+
+[node name="Walker136" parent="Walkers" instance=ExtResource("1")]
+transform = Transform3D(0.9903, 0, 0.1392, 0, 1, 0, -0.1392, 0, 0.9903, 0.550, 0, 2.750)
+
+[node name="AnimationPlayer" parent="Walkers/Walker136"]
+speed_scale = 0.88
+
+[node name="Walker137" parent="Walkers" instance=ExtResource("1")]
+transform = Transform3D(0.8746, 0, -0.4848, 0, 1, 0, 0.4848, 0, 0.8746, 1.650, 0, 2.750)
+
+[node name="AnimationPlayer" parent="Walkers/Walker137"]
+speed_scale = 1.01
+
+[node name="Walker138" parent="Walkers" instance=ExtResource("1")]
+transform = Transform3D(0.4067, 0, -0.9135, 0, 1, 0, 0.9135, 0, 0.4067, 2.750, 0, 2.750)
+
+[node name="AnimationPlayer" parent="Walkers/Walker138"]
+speed_scale = 1.14
+
+[node name="Walker139" parent="Walkers" instance=ExtResource("1")]
+transform = Transform3D(-0.2250, 0, -0.9744, 0, 1, 0, 0.9744, 0, -0.2250, 3.850, 0, 2.750)
+
+[node name="AnimationPlayer" parent="Walkers/Walker139"]
+speed_scale = 0.87
+
+[node name="Walker140" parent="Walkers" instance=ExtResource("1")]
+transform = Transform3D(-0.7660, 0, -0.6428, 0, 1, 0, 0.6428, 0, -0.7660, 4.950, 0, 2.750)
+
+[node name="AnimationPlayer" parent="Walkers/Walker140"]
+speed_scale = 1.00
+
+[node name="Walker141" parent="Walkers" instance=ExtResource("1")]
+transform = Transform3D(-0.9986, 0, -0.0523, 0, 1, 0, 0.0523, 0, -0.9986, 6.050, 0, 2.750)
+
+[node name="AnimationPlayer" parent="Walkers/Walker141"]
+speed_scale = 1.13
+
+[node name="Walker142" parent="Walkers" instance=ExtResource("1")]
+transform = Transform3D(-0.8290, 0, 0.5592, 0, 1, 0, -0.5592, 0, -0.8290, 7.150, 0, 2.750)
+
+[node name="AnimationPlayer" parent="Walkers/Walker142"]
+speed_scale = 0.86
+
+[node name="Walker143" parent="Walkers" instance=ExtResource("1")]
+transform = Transform3D(-0.3256, 0, 0.9455, 0, 1, 0, -0.9455, 0, -0.3256, 8.250, 0, 2.750)
+
+[node name="AnimationPlayer" parent="Walkers/Walker143"]
+speed_scale = 0.99
+
+[node name="Walker144" parent="Walkers" instance=ExtResource("1")]
+transform = Transform3D(0.3090, 0, 0.9511, 0, 1, 0, -0.9511, 0, 0.3090, -8.250, 0, 3.850)
+
+[node name="AnimationPlayer" parent="Walkers/Walker144"]
+speed_scale = 1.12
+
+[node name="Walker145" parent="Walkers" instance=ExtResource("1")]
+transform = Transform3D(0.8192, 0, 0.5736, 0, 1, 0, -0.5736, 0, 0.8192, -7.150, 0, 3.850)
+
+[node name="AnimationPlayer" parent="Walkers/Walker145"]
+speed_scale = 0.85
+
+[node name="Walker146" parent="Walkers" instance=ExtResource("1")]
+transform = Transform3D(0.9994, 0, -0.0349, 0, 1, 0, 0.0349, 0, 0.9994, -6.050, 0, 3.850)
+
+[node name="AnimationPlayer" parent="Walkers/Walker146"]
+speed_scale = 0.98
+
+[node name="Walker147" parent="Walkers" instance=ExtResource("1")]
+transform = Transform3D(0.7771, 0, -0.6293, 0, 1, 0, 0.6293, 0, 0.7771, -4.950, 0, 3.850)
+
+[node name="AnimationPlayer" parent="Walkers/Walker147"]
+speed_scale = 1.11
+
+[node name="Walker148" parent="Walkers" instance=ExtResource("1")]
+transform = Transform3D(0.2419, 0, -0.9703, 0, 1, 0, 0.9703, 0, 0.2419, -3.850, 0, 3.850)
+
+[node name="AnimationPlayer" parent="Walkers/Walker148"]
+speed_scale = 0.84
+
+[node name="Walker149" parent="Walkers" instance=ExtResource("1")]
+transform = Transform3D(-0.3907, 0, -0.9205, 0, 1, 0, 0.9205, 0, -0.3907, -2.750, 0, 3.850)
+
+[node name="AnimationPlayer" parent="Walkers/Walker149"]
+speed_scale = 0.97
+
+[node name="Walker150" parent="Walkers" instance=ExtResource("1")]
+transform = Transform3D(-0.8660, 0, -0.5000, 0, 1, 0, 0.5000, 0, -0.8660, -1.650, 0, 3.850)
+
+[node name="AnimationPlayer" parent="Walkers/Walker150"]
+speed_scale = 1.10
+
+[node name="Walker151" parent="Walkers" instance=ExtResource("1")]
+transform = Transform3D(-0.9925, 0, 0.1219, 0, 1, 0, -0.1219, 0, -0.9925, -0.550, 0, 3.850)
+
+[node name="AnimationPlayer" parent="Walkers/Walker151"]
+speed_scale = 0.83
+
+[node name="Walker152" parent="Walkers" instance=ExtResource("1")]
+transform = Transform3D(-0.7193, 0, 0.6947, 0, 1, 0, -0.6947, 0, -0.7193, 0.550, 0, 3.850)
+
+[node name="AnimationPlayer" parent="Walkers/Walker152"]
+speed_scale = 0.96
+
+[node name="Walker153" parent="Walkers" instance=ExtResource("1")]
+transform = Transform3D(-0.1564, 0, 0.9877, 0, 1, 0, -0.9877, 0, -0.1564, 1.650, 0, 3.850)
+
+[node name="AnimationPlayer" parent="Walkers/Walker153"]
+speed_scale = 1.09
+
+[node name="Walker154" parent="Walkers" instance=ExtResource("1")]
+transform = Transform3D(0.4695, 0, 0.8829, 0, 1, 0, -0.8829, 0, 0.4695, 2.750, 0, 3.850)
+
+[node name="AnimationPlayer" parent="Walkers/Walker154"]
+speed_scale = 0.82
+
+[node name="Walker155" parent="Walkers" instance=ExtResource("1")]
+transform = Transform3D(0.9063, 0, 0.4226, 0, 1, 0, -0.4226, 0, 0.9063, 3.850, 0, 3.850)
+
+[node name="AnimationPlayer" parent="Walkers/Walker155"]
+speed_scale = 0.95
+
+[node name="Walker156" parent="Walkers" instance=ExtResource("1")]
+transform = Transform3D(0.9781, 0, -0.2079, 0, 1, 0, 0.2079, 0, 0.9781, 4.950, 0, 3.850)
+
+[node name="AnimationPlayer" parent="Walkers/Walker156"]
+speed_scale = 1.08
+
+[node name="Walker157" parent="Walkers" instance=ExtResource("1")]
+transform = Transform3D(0.6561, 0, -0.7547, 0, 1, 0, 0.7547, 0, 0.6561, 6.050, 0, 3.850)
+
+[node name="AnimationPlayer" parent="Walkers/Walker157"]
+speed_scale = 0.81
+
+[node name="Walker158" parent="Walkers" instance=ExtResource("1")]
+transform = Transform3D(0.0698, 0, -0.9976, 0, 1, 0, 0.9976, 0, 0.0698, 7.150, 0, 3.850)
+
+[node name="AnimationPlayer" parent="Walkers/Walker158"]
+speed_scale = 0.94
+
+[node name="Walker159" parent="Walkers" instance=ExtResource("1")]
+transform = Transform3D(-0.5446, 0, -0.8387, 0, 1, 0, 0.8387, 0, -0.5446, 8.250, 0, 3.850)
+
+[node name="AnimationPlayer" parent="Walkers/Walker159"]
+speed_scale = 1.07
+
+[node name="Walker160" parent="Walkers" instance=ExtResource("1")]
+transform = Transform3D(-0.9397, 0, -0.3420, 0, 1, 0, 0.3420, 0, -0.9397, -8.250, 0, 4.950)
+
+[node name="AnimationPlayer" parent="Walkers/Walker160"]
+speed_scale = 0.80
+
+[node name="Walker161" parent="Walkers" instance=ExtResource("1")]
+transform = Transform3D(-0.9563, 0, 0.2924, 0, 1, 0, -0.2924, 0, -0.9563, -7.150, 0, 4.950)
+
+[node name="AnimationPlayer" parent="Walkers/Walker161"]
+speed_scale = 0.93
+
+[node name="Walker162" parent="Walkers" instance=ExtResource("1")]
+transform = Transform3D(-0.5878, 0, 0.8090, 0, 1, 0, -0.8090, 0, -0.5878, -6.050, 0, 4.950)
+
+[node name="AnimationPlayer" parent="Walkers/Walker162"]
+speed_scale = 1.06
+
+[node name="Walker163" parent="Walkers" instance=ExtResource("1")]
+transform = Transform3D(0.0175, 0, 0.9998, 0, 1, 0, -0.9998, 0, 0.0175, -4.950, 0, 4.950)
+
+[node name="AnimationPlayer" parent="Walkers/Walker163"]
+speed_scale = 1.19
+
+[node name="Walker164" parent="Walkers" instance=ExtResource("1")]
+transform = Transform3D(0.6157, 0, 0.7880, 0, 1, 0, -0.7880, 0, 0.6157, -3.850, 0, 4.950)
+
+[node name="AnimationPlayer" parent="Walkers/Walker164"]
+speed_scale = 0.92
+
+[node name="Walker165" parent="Walkers" instance=ExtResource("1")]
+transform = Transform3D(0.9659, 0, 0.2588, 0, 1, 0, -0.2588, 0, 0.9659, -2.750, 0, 4.950)
+
+[node name="AnimationPlayer" parent="Walkers/Walker165"]
+speed_scale = 1.05
+
+[node name="Walker166" parent="Walkers" instance=ExtResource("1")]
+transform = Transform3D(0.9272, 0, -0.3746, 0, 1, 0, 0.3746, 0, 0.9272, -1.650, 0, 4.950)
+
+[node name="AnimationPlayer" parent="Walkers/Walker166"]
+speed_scale = 1.18
+
+[node name="Walker167" parent="Walkers" instance=ExtResource("1")]
+transform = Transform3D(0.5150, 0, -0.8572, 0, 1, 0, 0.8572, 0, 0.5150, -0.550, 0, 4.950)
+
+[node name="AnimationPlayer" parent="Walkers/Walker167"]
+speed_scale = 0.91
+
+[node name="Walker168" parent="Walkers" instance=ExtResource("1")]
+transform = Transform3D(-0.1045, 0, -0.9945, 0, 1, 0, 0.9945, 0, -0.1045, 0.550, 0, 4.950)
+
+[node name="AnimationPlayer" parent="Walkers/Walker168"]
+speed_scale = 1.04
+
+[node name="Walker169" parent="Walkers" instance=ExtResource("1")]
+transform = Transform3D(-0.6820, 0, -0.7314, 0, 1, 0, 0.7314, 0, -0.6820, 1.650, 0, 4.950)
+
+[node name="AnimationPlayer" parent="Walkers/Walker169"]
+speed_scale = 1.17
+
+[node name="Walker170" parent="Walkers" instance=ExtResource("1")]
+transform = Transform3D(-0.9848, 0, -0.1736, 0, 1, 0, 0.1736, 0, -0.9848, 2.750, 0, 4.950)
+
+[node name="AnimationPlayer" parent="Walkers/Walker170"]
+speed_scale = 0.90
+
+[node name="Walker171" parent="Walkers" instance=ExtResource("1")]
+transform = Transform3D(-0.8910, 0, 0.4540, 0, 1, 0, -0.4540, 0, -0.8910, 3.850, 0, 4.950)
+
+[node name="AnimationPlayer" parent="Walkers/Walker171"]
+speed_scale = 1.03
+
+[node name="Walker172" parent="Walkers" instance=ExtResource("1")]
+transform = Transform3D(-0.4384, 0, 0.8988, 0, 1, 0, -0.8988, 0, -0.4384, 4.950, 0, 4.950)
+
+[node name="AnimationPlayer" parent="Walkers/Walker172"]
+speed_scale = 1.16
+
+[node name="Walker173" parent="Walkers" instance=ExtResource("1")]
+transform = Transform3D(0.1908, 0, 0.9816, 0, 1, 0, -0.9816, 0, 0.1908, 6.050, 0, 4.950)
+
+[node name="AnimationPlayer" parent="Walkers/Walker173"]
+speed_scale = 0.89
+
+[node name="Walker174" parent="Walkers" instance=ExtResource("1")]
+transform = Transform3D(0.7431, 0, 0.6691, 0, 1, 0, -0.6691, 0, 0.7431, 7.150, 0, 4.950)
+
+[node name="AnimationPlayer" parent="Walkers/Walker174"]
+speed_scale = 1.02
+
+[node name="Walker175" parent="Walkers" instance=ExtResource("1")]
+transform = Transform3D(0.9962, 0, 0.0872, 0, 1, 0, -0.0872, 0, 0.9962, 8.250, 0, 4.950)
+
+[node name="AnimationPlayer" parent="Walkers/Walker175"]
+speed_scale = 1.15
+
+[node name="Walker176" parent="Walkers" instance=ExtResource("1")]
+transform = Transform3D(0.8480, 0, -0.5299, 0, 1, 0, 0.5299, 0, 0.8480, -8.250, 0, 6.050)
+
+[node name="AnimationPlayer" parent="Walkers/Walker176"]
+speed_scale = 0.88
+
+[node name="Walker177" parent="Walkers" instance=ExtResource("1")]
+transform = Transform3D(0.3584, 0, -0.9336, 0, 1, 0, 0.9336, 0, 0.3584, -7.150, 0, 6.050)
+
+[node name="AnimationPlayer" parent="Walkers/Walker177"]
+speed_scale = 1.01
+
+[node name="Walker178" parent="Walkers" instance=ExtResource("1")]
+transform = Transform3D(-0.2756, 0, -0.9613, 0, 1, 0, 0.9613, 0, -0.2756, -6.050, 0, 6.050)
+
+[node name="AnimationPlayer" parent="Walkers/Walker178"]
+speed_scale = 1.14
+
+[node name="Walker179" parent="Walkers" instance=ExtResource("1")]
+transform = Transform3D(-0.7986, 0, -0.6018, 0, 1, 0, 0.6018, 0, -0.7986, -4.950, 0, 6.050)
+
+[node name="AnimationPlayer" parent="Walkers/Walker179"]
+speed_scale = 0.87
+
+[node name="Walker180" parent="Walkers" instance=ExtResource("1")]
+transform = Transform3D(-1.0000, 0, -0.0000, 0, 1, 0, 0.0000, 0, -1.0000, -3.850, 0, 6.050)
+
+[node name="AnimationPlayer" parent="Walkers/Walker180"]
+speed_scale = 1.00
+
+[node name="Walker181" parent="Walkers" instance=ExtResource("1")]
+transform = Transform3D(-0.7986, 0, 0.6018, 0, 1, 0, -0.6018, 0, -0.7986, -2.750, 0, 6.050)
+
+[node name="AnimationPlayer" parent="Walkers/Walker181"]
+speed_scale = 1.13
+
+[node name="Walker182" parent="Walkers" instance=ExtResource("1")]
+transform = Transform3D(-0.2756, 0, 0.9613, 0, 1, 0, -0.9613, 0, -0.2756, -1.650, 0, 6.050)
+
+[node name="AnimationPlayer" parent="Walkers/Walker182"]
+speed_scale = 0.86
+
+[node name="Walker183" parent="Walkers" instance=ExtResource("1")]
+transform = Transform3D(0.3584, 0, 0.9336, 0, 1, 0, -0.9336, 0, 0.3584, -0.550, 0, 6.050)
+
+[node name="AnimationPlayer" parent="Walkers/Walker183"]
+speed_scale = 0.99
+
+[node name="Walker184" parent="Walkers" instance=ExtResource("1")]
+transform = Transform3D(0.8480, 0, 0.5299, 0, 1, 0, -0.5299, 0, 0.8480, 0.550, 0, 6.050)
+
+[node name="AnimationPlayer" parent="Walkers/Walker184"]
+speed_scale = 1.12
+
+[node name="Walker185" parent="Walkers" instance=ExtResource("1")]
+transform = Transform3D(0.9962, 0, -0.0872, 0, 1, 0, 0.0872, 0, 0.9962, 1.650, 0, 6.050)
+
+[node name="AnimationPlayer" parent="Walkers/Walker185"]
+speed_scale = 0.85
+
+[node name="Walker186" parent="Walkers" instance=ExtResource("1")]
+transform = Transform3D(0.7431, 0, -0.6691, 0, 1, 0, 0.6691, 0, 0.7431, 2.750, 0, 6.050)
+
+[node name="AnimationPlayer" parent="Walkers/Walker186"]
+speed_scale = 0.98
+
+[node name="Walker187" parent="Walkers" instance=ExtResource("1")]
+transform = Transform3D(0.1908, 0, -0.9816, 0, 1, 0, 0.9816, 0, 0.1908, 3.850, 0, 6.050)
+
+[node name="AnimationPlayer" parent="Walkers/Walker187"]
+speed_scale = 1.11
+
+[node name="Walker188" parent="Walkers" instance=ExtResource("1")]
+transform = Transform3D(-0.4384, 0, -0.8988, 0, 1, 0, 0.8988, 0, -0.4384, 4.950, 0, 6.050)
+
+[node name="AnimationPlayer" parent="Walkers/Walker188"]
+speed_scale = 0.84
+
+[node name="Walker189" parent="Walkers" instance=ExtResource("1")]
+transform = Transform3D(-0.8910, 0, -0.4540, 0, 1, 0, 0.4540, 0, -0.8910, 6.050, 0, 6.050)
+
+[node name="AnimationPlayer" parent="Walkers/Walker189"]
+speed_scale = 0.97
+
+[node name="Walker190" parent="Walkers" instance=ExtResource("1")]
+transform = Transform3D(-0.9848, 0, 0.1736, 0, 1, 0, -0.1736, 0, -0.9848, 7.150, 0, 6.050)
+
+[node name="AnimationPlayer" parent="Walkers/Walker190"]
+speed_scale = 1.10
+
+[node name="Walker191" parent="Walkers" instance=ExtResource("1")]
+transform = Transform3D(-0.6820, 0, 0.7314, 0, 1, 0, -0.7314, 0, -0.6820, 8.250, 0, 6.050)
+
+[node name="AnimationPlayer" parent="Walkers/Walker191"]
+speed_scale = 0.83
+

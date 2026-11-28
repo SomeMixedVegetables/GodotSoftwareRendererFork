@@ -1,0 +1,116 @@
+[gd_scene format=3]
+
+[ext_resource type="ArrayMesh" path="res://meshes/walker.tres" id="1_dlw70"]
+[ext_resource type="Skin" path="res://meshes/walker_skin.tres" id="2_ba6nk"]
+
+[sub_resource type="Animation" id="Animation_m0ted"]
+loop_mode = 1
+tracks/0/type = "rotation_3d"
+tracks/0/imported = false
+tracks/0/enabled = true
+tracks/0/path = NodePath("Skeleton3D:leg_l")
+tracks/0/interp = 1
+tracks/0/loop_wrap = true
+tracks/0/keys = PackedFloat32Array(0, 1, 0, 0, 0, 1, 0.25, 1, 0.29552022, 0, 0, 0.9553365, 0.5, 1, 3.6739406e-17, 0, 0, 1, 0.75, 1, -0.29552022, 0, 0, 0.9553365, 1, 1, -7.347881e-17, 0, 0, 1)
+tracks/1/type = "rotation_3d"
+tracks/1/imported = false
+tracks/1/enabled = true
+tracks/1/path = NodePath("Skeleton3D:leg_r")
+tracks/1/interp = 1
+tracks/1/loop_wrap = true
+tracks/1/keys = PackedFloat32Array(0, 1, 0, 0, 0, 1, 0.25, 1, -0.29552022, 0, 0, 0.9553365, 0.5, 1, -3.6739406e-17, 0, 0, 1, 0.75, 1, 0.29552022, 0, 0, 0.9553365, 1, 1, 7.347881e-17, 0, 0, 1)
+tracks/2/type = "rotation_3d"
+tracks/2/imported = false
+tracks/2/enabled = true
+tracks/2/path = NodePath("Skeleton3D:arm_l")
+tracks/2/interp = 1
+tracks/2/loop_wrap = true
+tracks/2/keys = PackedFloat32Array(0, 1, 0, 0, 0, 1, 0.25, 1, -0.24740396, 0, 0, 0.9689124, 0.5, 1, -3.061617e-17, 0, 0, 1, 0.75, 1, 0.24740396, 0, 0, 0.9689124, 1, 1, 6.123234e-17, 0, 0, 1)
+tracks/3/type = "rotation_3d"
+tracks/3/imported = false
+tracks/3/enabled = true
+tracks/3/path = NodePath("Skeleton3D:arm_r")
+tracks/3/interp = 1
+tracks/3/loop_wrap = true
+tracks/3/keys = PackedFloat32Array(0, 1, 0, 0, 0, 1, 0.25, 1, 0.24740396, 0, 0, 0.9689124, 0.5, 1, 3.061617e-17, 0, 0, 1, 0.75, 1, -0.24740396, 0, 0, 0.9689124, 1, 1, -6.123234e-17, 0, 0, 1)
+tracks/4/type = "position_3d"
+tracks/4/imported = false
+tracks/4/enabled = true
+tracks/4/path = NodePath("Skeleton3D:hips")
+tracks/4/interp = 1
+tracks/4/loop_wrap = true
+tracks/4/keys = PackedFloat32Array(0, 1, 0, 0.94, 0, 0.25, 1, 0, 0.9, 0, 0.5, 1, 0, 0.94, 0, 0.75, 1, 0, 0.9, 0, 1, 1, 0, 0.94, 0)
+
+[sub_resource type="AnimationLibrary" id="AnimationLibrary_oc67j"]
+_data = {
+&"walk": SubResource("Animation_m0ted")
+}
+
+[node name="Walker" type="Node3D" unique_id=1153304059]
+
+[node name="Skeleton3D" type="Skeleton3D" parent="." unique_id=2034366027]
+bones/0/name = "hips"
+bones/0/parent = -1
+bones/0/rest = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.9, 0)
+bones/0/enabled = true
+bones/0/position = Vector3(0, 0.9, 0)
+bones/0/rotation = Quaternion(0, 0, 0, 1)
+bones/0/scale = Vector3(1, 1, 1)
+bones/0/skin_scale = Vector3(1, 1, 1)
+bones/1/name = "torso"
+bones/1/parent = 0
+bones/1/rest = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.1, 0)
+bones/1/enabled = true
+bones/1/position = Vector3(0, 0.1, 0)
+bones/1/rotation = Quaternion(0, 0, 0, 1)
+bones/1/scale = Vector3(1, 1, 1)
+bones/1/skin_scale = Vector3(1, 1, 1)
+bones/2/name = "head"
+bones/2/parent = 1
+bones/2/rest = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.55, 0)
+bones/2/enabled = true
+bones/2/position = Vector3(0, 0.55, 0)
+bones/2/rotation = Quaternion(0, 0, 0, 1)
+bones/2/scale = Vector3(1, 1, 1)
+bones/2/skin_scale = Vector3(1, 1, 1)
+bones/3/name = "leg_l"
+bones/3/parent = 0
+bones/3/rest = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.12, -0.05, 0)
+bones/3/enabled = true
+bones/3/position = Vector3(-0.12, -0.05, 0)
+bones/3/rotation = Quaternion(0, 0, 0, 1)
+bones/3/scale = Vector3(1, 1, 1)
+bones/3/skin_scale = Vector3(1, 1, 1)
+bones/4/name = "leg_r"
+bones/4/parent = 0
+bones/4/rest = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.12, -0.05, 0)
+bones/4/enabled = true
+bones/4/position = Vector3(0.12, -0.05, 0)
+bones/4/rotation = Quaternion(0, 0, 0, 1)
+bones/4/scale = Vector3(1, 1, 1)
+bones/4/skin_scale = Vector3(1, 1, 1)
+bones/5/name = "arm_l"
+bones/5/parent = 1
+bones/5/rest = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.3, 0.45, 0)
+bones/5/enabled = true
+bones/5/position = Vector3(-0.3, 0.45, 0)
+bones/5/rotation = Quaternion(0, 0, 0, 1)
+bones/5/scale = Vector3(1, 1, 1)
+bones/5/skin_scale = Vector3(1, 1, 1)
+bones/6/name = "arm_r"
+bones/6/parent = 1
+bones/6/rest = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.3, 0.45, 0)
+bones/6/enabled = true
+bones/6/position = Vector3(0.3, 0.45, 0)
+bones/6/rotation = Quaternion(0, 0, 0, 1)
+bones/6/scale = Vector3(1, 1, 1)
+bones/6/skin_scale = Vector3(1, 1, 1)
+
+[node name="Body" type="MeshInstance3D" parent="Skeleton3D" unique_id=1925214651]
+mesh = ExtResource("1_dlw70")
+skin = ExtResource("2_ba6nk")
+skeleton = NodePath("..")
+
+[node name="AnimationPlayer" type="AnimationPlayer" parent="." unique_id=757743580]
+libraries/ = SubResource("AnimationLibrary_oc67j")
+autoplay = &"walk"
