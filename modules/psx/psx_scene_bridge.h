@@ -1896,7 +1896,11 @@ private:
 		c = hash_murmur3_one_32((uint32_t)data.width | (uint32_t)data.height << 12 | (uint32_t)data.depth << 24 | (p_semi ? 1u << 28 : 0u), c);
 		const uint32_t c2 = hash_murmur3_buffer(data.clut_semi.data(), (int)(data.clut_semi.size() * sizeof(uint16_t)), c ^ 0x9E3779B9u);
 		r_use.content = ((uint64_t)c << 32) | c2;
-		if (!textures.has(r_use.content)) {
+		if (TextureEntry *existing = textures.getptr(r_use.content)) {
+			// Same texels and palettes as a use already stored: one entry.
+			// It counts as baked if any of its uses is.
+			existing->baked = existing->baked || p_baked;
+		} else {
 			TextureEntry &e = textures.insert(r_use.content, TextureEntry())->value;
 			e.data = std::move(p_data);
 			e.needs_semi_clut = p_semi;
